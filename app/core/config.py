@@ -1,3 +1,5 @@
+import os
+from typing import Optional
 from pydantic import model_validator, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -18,6 +20,10 @@ class Settings(BaseSettings):
     medflow_jwt_token: str = Field(default="mock_token")
     gemini_api_key: str = Field(default="mock_gemini_key", validation_alias="GEMINI_API_KEY")
     debounce_seconds: float = Field(default=30.0, validation_alias="DEBOUNCE_SECONDS")
+    langchain_tracing_v2: bool = Field(default=False, validation_alias="LANGCHAIN_TRACING_V2")
+    langchain_api_key: Optional[str] = Field(default=None, validation_alias="LANGCHAIN_API_KEY")
+    langchain_project: Optional[str] = Field(default=None, validation_alias="LANGCHAIN_PROJECT")
+
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -51,3 +57,16 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Export Settings fields to os.environ so the LangChain client libraries can read them
+if settings.langchain_tracing_v2:
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+else:
+    os.environ["LANGCHAIN_TRACING_V2"] = "false"
+
+if settings.langchain_api_key:
+    os.environ["LANGCHAIN_API_KEY"] = settings.langchain_api_key
+
+if settings.langchain_project:
+    os.environ["LANGCHAIN_PROJECT"] = settings.langchain_project
+

@@ -466,3 +466,42 @@ O script deve:
 - [ ] O comando `poetry run pytest` passa com 100% de sucesso (incluindo todos os 103 testes originais mais eventuais novos testes adicionados).
 
 
+
+## Follow-up — 2026-07-01T16:58:47Z
+
+Configuração de monitoramento e tracing de LLM para o CareFlow AI, incluindo instrumentação de métricas com Prometheus, logs estruturados via módulo padrão python `logging` para a execução do grafo LangGraph, e integração do LangSmith.
+
+Working directory: /Users/thiagoanselmobarbosa/Desktop/medflow full/CareFlow AI/careflow-backend
+Integrity mode: development
+
+## Requirements
+
+### R1. Integração de Métricas com Prometheus
+- Adicione a dependência `prometheus-fastapi-instrumentator` ao Poetry e instale-a.
+- Inicialize a instrumentação no arquivo `app/main.py` para coletar métricas de requisições HTTP da API.
+- Exponha o endpoint `/metrics` no FastAPI para coletas do Prometheus.
+
+### R2. Rastreamento e Logs do LangGraph (Stdout Tracing)
+- Configure logs estruturados usando o módulo padrão de `logging` do Python para a execução do grafo.
+- Toda vez que o grafo do LangGraph for invocado, os logs devem registrar no nível INFO ou adequado:
+  * O timestamp do log.
+  * O ID da sessão (`phone_number`).
+  * A ordem sequencial dos nós percorridos (ex: `[LangGraph Trace] Session 55... | Node: supervisor_node -> Node: crc_sdr_node -> Node: supervisor_node -> END`).
+  * O tempo total de processamento de cada nó em milissegundos.
+
+### R3. Integração com LangSmith (Cloud Tracing)
+- Configure a leitura das seguintes variáveis de ambiente no arquivo `app/core/config.py` e `.env` para carregar as configurações de tracing no `Settings` do Pydantic, permitindo que o ecossistema LangChain/LangSmith as leia e rastreie automaticamente:
+  * `LANGCHAIN_TRACING_V2=true`
+  * `LANGCHAIN_API_KEY=<chave>`
+  * `LANGCHAIN_PROJECT=<nome_do_projeto>`
+
+## Acceptance Criteria
+
+### Monitoring and Verification
+- [ ] O arquivo `tests/test_monitoring.py` contendo testes unitários e de integração deve ser criado.
+- [ ] O teste deve validar que `GET /metrics` retorna HTTP 200 e texto contendo métricas do Prometheus (ex: `http_requests_total`).
+- [ ] O teste deve validar que ao invocar o grafo LangGraph, logs contendo o formato esperado de percurso de nós e tempos em milissegundos são emitidos no log do sistema (capturável via fixture `caplog` do pytest).
+- [ ] Executar `poetry run pytest` deve passar com 100% de sucesso (somando os novos testes de monitoramento aos anteriores).
+
+
+

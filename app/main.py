@@ -1,7 +1,12 @@
+import logging
 import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from prometheus_fastapi_instrumentator import Instrumentator
+
+# Configure standard logging to stdout
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
 from app.api.health import router as health_router
 from app.api.knowledge import router as knowledge_router
@@ -19,6 +24,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+
+# Instrument the app to expose /metrics
+Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
 # Include routers
 app.include_router(health_router)

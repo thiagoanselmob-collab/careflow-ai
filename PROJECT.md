@@ -13,6 +13,7 @@
 | 2 | Codebase Verification & Analysis | Run existing test suite using pytest to verify stability, then verify the webhook API implementation logic. | M1 | DONE |
 | 3 | Webhook Concurrency Lock & Flow | Test and verify concurrency debounce, Redis lock, and LangGraph execution integration. | M2 | DONE |
 | 4 | Comprehensive Webhook Tests | Validate all acceptance criteria, check test counts (>88 tests total), and ensure 100% pass rate. | M3 | DONE |
+| 5 | Monitoring & Tracing Configuration | Integrate Prometheus metrics, LangGraph stdout logging, and LangSmith cloud tracing. Verify via tests. | M4 | DONE |
 
 ## Code Layout
 - `app/api/webhook.py`: Router and background task processing for webhook
@@ -20,3 +21,5 @@
 - `app/models/whatsapp.py`: MessageBuffer and ClientData models
 - `tests/test_webhook_queue.py`: Webhook integration and concurrency tests
 - `tests/test_sdr_node.py`: LangGraph SDR node test cases (Phase 3.2 completion)
+- `tests/test_monitoring.py`: Monitoring and tracing verification tests
+

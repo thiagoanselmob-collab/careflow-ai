@@ -12,8 +12,88 @@ from langchain_core.runnables import RunnableConfig
 from sqlalchemy import text
 from app.services.medflow_client import MedflowClient, MedflowClientError, MedflowClientHTTPError
 from app.core.config import settings
+import contextvars
+import time as time_lib
+import inspect
 
 logger = logging.getLogger(__name__)
+
+# ContextVar to track node traversal order per graph invoke
+traversal_path_var = contextvars.ContextVar("traversal_path", default=None)
+
+def log_node_execution(node_name):
+    def decorator(func):
+        if inspect.iscoroutinefunction(func):
+            async def async_wrapper(state, config=None, *args, **kwargs):
+                start_time = time_lib.perf_counter()
+                configurable = config.get("configurable", {}) if config else {}
+                phone_number = configurable.get("patient_phone", "unknown")
+                logger.info(f"[Node Start] Session {phone_number} | Node: {node_name}")
+                current_path = traversal_path_var.get()
+                if current_path is not None:
+                    current_path.append(node_name)
+                try:
+                    result = await func(state, config, *args, **kwargs)
+                    return result
+                finally:
+                    duration_ms = (time_lib.perf_counter() - start_time) * 1000
+                    logger.info(f"[Node End] Session {phone_number} | Node: {node_name} | Duration: {duration_ms:.2f}ms")
+            return async_wrapper
+        else:
+            def sync_wrapper(state, config=None, *args, **kwargs):
+                start_time = time_lib.perf_counter()
+                configurable = config.get("configurable", {}) if config else {}
+                phone_number = configurable.get("patient_phone", "unknown")
+                logger.info(f"[Node Start] Session {phone_number} | Node: {node_name}")
+                current_path = traversal_path_var.get()
+                if current_path is not None:
+                    current_path.append(node_name)
+                try:
+                    result = func(state, config, *args, **kwargs)
+                    return result
+                finally:
+                    duration_ms = (time_lib.perf_counter() - start_time) * 1000
+                    logger.info(f"[Node End] Session {phone_number} | Node: {node_name} | Duration: {duration_ms:.2f}ms")
+            return sync_wrapper
+    return decorator
+
+def wrap_graph_invoke(original_invoke):
+    def wrapper(input, config=None, **kwargs):
+        token = traversal_path_var.set([])
+        configurable = config.get("configurable", {}) if config else {}
+        phone_number = configurable.get("patient_phone", "unknown")
+        try:
+            result = original_invoke(input, config=config, **kwargs)
+            return result
+        finally:
+            path = traversal_path_var.get()
+            path_str = " -> ".join([f"Node: {node}" for node in path])
+            if path_str:
+                path_str += " -> END"
+            else:
+                path_str = "END"
+            logger.info(f"[LangGraph Trace] Session {phone_number} | {path_str}")
+            traversal_path_var.reset(token)
+    return wrapper
+
+def wrap_graph_ainvoke(original_ainvoke):
+    async def wrapper(input, config=None, **kwargs):
+        token = traversal_path_var.set([])
+        configurable = config.get("configurable", {}) if config else {}
+        phone_number = configurable.get("patient_phone", "unknown")
+        try:
+            result = await original_ainvoke(input, config=config, **kwargs)
+            return result
+        finally:
+            path = traversal_path_var.get()
+            path_str = " -> ".join([f"Node: {node}" for node in path])
+            if path_str:
+                path_str += " -> END"
+            else:
+                path_str = "END"
+            logger.info(f"[LangGraph Trace] Session {phone_number} | {path_str}")
+            traversal_path_var.reset(token)
+    return wrapper
 
 
 def reduce_messages(left: List[MessageSchema], right: List[MessageSchema]) -> List[MessageSchema]:
@@ -135,6 +215,7 @@ async def _async_escalate_human(tenant_id: Optional[str], patient_phone: Optiona
             logger.error(f"[Escalation] Failed to patch CRM appointment status: {e}")
 
 
+@log_node_execution("supervisor_node")
 def supervisor_node(state: AgentState, config: Optional[RunnableConfig] = None) -> dict:
     """
     Evaluates the conversation history and collected data, and decides the next node.
@@ -275,6 +356,7 @@ DEFAULT_SDR_PROFILE = {
 }
 
 
+@log_node_execution("crc_sdr_node")
 def crc_sdr_node(state: AgentState, config: Optional[RunnableConfig] = None) -> dict:
     """
     CRC/SDR node: dynamic multi-tenant logic using ChatAnthropic and structured extraction.
@@ -776,6 +858,7 @@ async def _async_agenda_node(state: AgentState, config: Optional[RunnableConfig]
     }
 
 
+@log_node_execution("agenda_node")
 def agenda_node(state: AgentState, config: Optional[RunnableConfig] = None) -> dict:
     """
     Agenda node: handles scheduling logic, demographics validation, explicit confirmation,
@@ -989,6 +1072,7 @@ async def _async_rag_node(state: AgentState, config: Optional[RunnableConfig] = 
     }
 
 
+@log_node_execution("rag_node")
 def rag_node(state: AgentState, config: Optional[RunnableConfig] = None) -> dict:
     """
     RAG node: handles institutional questions by retrieving dynamic knowledge blocks
@@ -1054,3 +1138,5 @@ workflow.add_edge("rag_node", "supervisor")
 
 # Compile graph
 graph = workflow.compile()
+graph.invoke = wrap_graph_invoke(graph.invoke)
+graph.ainvoke = wrap_graph_ainvoke(graph.ainvoke)
