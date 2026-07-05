@@ -5,6 +5,7 @@ Contains Pydantic models for request/response serialization and validation.
 
 from .session import MessageSchema, CollectedDataSchema, SessionSchema
 from .agent_config import AgentConfigResponse, AgentConfigUpdate
+from .organization import OrganizationCreate, OrganizationUpdate, OrganizationResponse
 
 __all__ = [
     "MessageSchema",
@@ -12,4 +13,8 @@ __all__ = [
     "SessionSchema",
     "AgentConfigResponse",
     "AgentConfigUpdate",
+    "OrganizationCreate",
+    "OrganizationUpdate",
+    "OrganizationResponse",
 ]
+

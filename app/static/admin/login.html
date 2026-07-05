@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CareFlow AI - Admin Login</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Outfit', 'Inter', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #0f1117;
+            background-image: 
+                radial-gradient(at 0% 0%, hsla(160, 84%, 12%, 0.3) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, hsla(190, 90%, 12%, 0.3) 0px, transparent 50%);
+            min-height: 100vh;
+        }
+        .glass-card {
+            background: rgba(15, 17, 23, 0.45);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+        }
+        .glass-input {
+            background: rgba(15, 17, 23, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .glass-input:focus {
+            border-color: #10b981; /* Emerald border */
+            outline: none;
+            box-shadow: 0 0 15px rgba(16, 185, 129, 0.3); /* Emerald glow */
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center p-4 antialiased text-gray-200">
+    <!-- Admin Login Text for testing -->
+    <div class="w-full max-w-md">
+        <!-- Logo Header -->
+        <div class="flex flex-col items-center mb-8">
+            <div class="h-12 w-12 rounded-2xl bg-gradient-to-tr from-emerald-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-emerald-500/20 mb-3">
+                <span class="text-white font-bold text-2xl">CF</span>
+            </div>
+            <h1 class="text-3xl font-bold tracking-tight text-white">CareFlow AI</h1>
+            <p class="text-sm text-gray-400 mt-1">Admin Login</p>
+        </div>
+
+        <!-- Glassmorphic Card -->
+        <div class="glass-card rounded-2xl p-8 relative overflow-hidden">
+            <!-- Decorative gradient bar at the top -->
+            <div class="absolute top-0 left-0 w-full h-[3px] bg-gradient-to-r from-emerald-500 to-cyan-500"></div>
+
+            <form id="loginForm" class="space-y-6">
+                <div>
+                    <label for="username" class="block text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">Username</label>
+                    <input type="text" id="username" name="username" required placeholder="Digite seu usuário" 
+                           class="w-full glass-input rounded-xl px-4 py-3 text-sm text-white placeholder-gray-500">
+                </div>
+
+                <div>
+                    <label for="password" class="block text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">Password</label>
+                    <input type="password" id="password" name="password" required placeholder="Digite sua senha" 
+                           class="w-full glass-input rounded-xl px-4 py-3 text-sm text-white placeholder-gray-500">
+                </div>
+
+                <button type="submit" id="btnSubmit" 
+                        class="w-full bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-white font-semibold py-3 px-4 rounded-xl transition-all shadow-md shadow-emerald-500/20 flex items-center justify-center space-x-2">
+                    <!-- Loading Spinner (initially hidden) -->
+                    <svg id="spinner" class="animate-spin h-5 w-5 text-white hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span id="btnText">Entrar</span>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Toast Notifications Container -->
+    <div id="toastContainer" class="fixed bottom-5 right-5 space-y-3 z-50"></div>
+
+    <script>
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `p-4 rounded-xl border shadow-xl flex items-center space-x-3 transition-all duration-300 transform translate-y-2 opacity-0 glass-card max-w-sm`;
+            
+            let colorClass = 'text-emerald-400 border-emerald-500/30 bg-emerald-950/10';
+            let dotColor = 'bg-emerald-500';
+            if (type === 'error') {
+                colorClass = 'text-red-400 border-red-500/30 bg-red-950/10';
+                dotColor = 'bg-red-500';
+            } else if (type === 'info') {
+                colorClass = 'text-cyan-400 border-cyan-500/30 bg-cyan-950/10';
+                dotColor = 'bg-cyan-500';
+            }
+
+            toast.innerHTML = `
+                <div class="h-2.5 w-2.5 rounded-full ${dotColor} animate-pulse flex-shrink-0"></div>
+                <div class="flex-grow text-xs font-semibold ${colorClass}">${message}</div>
+            `;
+            
+            container.appendChild(toast);
+            
+            // Animate In
+            setTimeout(() => {
+                toast.classList.remove('translate-y-2', 'opacity-0');
+            }, 10);
+
+            // Animate Out & Remove
+            setTimeout(() => {
+                toast.classList.add('translate-y-2', 'opacity-0');
+                setTimeout(() => toast.remove(), 300);
+            }, 4000);
+        }
+
+        const form = document.getElementById('loginForm');
+        const btnSubmit = document.getElementById('btnSubmit');
+        const btnText = document.getElementById('btnText');
+        const spinner = document.getElementById('spinner');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value.trim();
+
+            if (!username || !password) {
+                showToast("Por favor, preencha todos os campos.", "error");
+                return;
+            }
+
+            // Set loading state
+            btnSubmit.disabled = true;
+            spinner.classList.remove('hidden');
+            btnText.innerText = "Entrando...";
+
+            try {
+                const response = await fetch("/api/v1/auth/login", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    localStorage.setItem('token', data.access_token);
+                    showToast("Login realizado com sucesso! Redirecionando...", "success");
+                    setTimeout(() => {
+                        window.location.replace('/admin/dashboard');
+                    }, 800);
+                } else {
+                    let errMsg = "Credenciais incorretas ou erro de autenticação.";
+                    try {
+                        const errData = await response.json();
+                        if (errData && errData.detail) {
+                            errMsg = errData.detail;
+                        }
+                    } catch (jsonErr) {}
+                    showToast(errMsg, "error");
+                    // Restore button state
+                    btnSubmit.disabled = false;
+                    spinner.classList.add('hidden');
+                    btnText.innerText = "Entrar";
+                }
+            } catch (err) {
+                showToast("Erro ao conectar com o servidor.", "error");
+                btnSubmit.disabled = false;
+                spinner.classList.add('hidden');
+                btnText.innerText = "Entrar";
+            }
+        });
+    </script>
+</body>
+</html>

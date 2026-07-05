@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CareFlow AI - Admin Dashboard</title>
+    <!-- Token Verification Script -->
+    <script>
+        if (!localStorage.getItem('token')) {
+            window.location.replace('/admin/login');
+        }
+    </script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Outfit', 'Inter', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #0f1117;
+            background-image: 
+                radial-gradient(at 0% 0%, hsla(160, 84%, 12%, 0.2) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, hsla(190, 90%, 12%, 0.2) 0px, transparent 50%);
+            min-height: 100vh;
+        }
+        .glass-card {
+            background: rgba(15, 17, 23, 0.45);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+        }
+        .glass-input {
+            background: rgba(15, 17, 23, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .glass-input:focus {
+            border-color: #06b6d4; /* Cyan border */
+            outline: none;
+            box-shadow: 0 0 15px rgba(6, 182, 212, 0.3); /* Cyan glow */
+        }
+    </style>
+</head>
+<body class="text-gray-200 antialiased py-8 px-4 sm:px-6 lg:px-8">
+    <div class="max-w-6xl mx-auto">
+        <!-- Header -->
+        <header class="flex flex-col md:flex-row justify-between items-center mb-10 pb-6 border-b border-gray-800">
+            <div class="flex items-center space-x-3 mb-4 md:mb-0">
+                <div class="h-10 w-10 rounded-xl bg-gradient-to-tr from-emerald-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-emerald-500/20">
+                    <span class="text-white font-bold text-xl">CF</span>
+                </div>
+                <div>
+                    <h1 class="text-2xl font-bold tracking-tight text-white">CareFlow AI</h1>
+                    <p class="text-xs text-gray-400">Admin Dashboard</p>
+                </div>
+            </div>
+            
+            <div class="flex items-center space-x-4">
+                <button onclick="openModal()" 
+                        class="bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-white font-semibold py-2 px-4 rounded-xl transition-all shadow-md shadow-emerald-500/20 flex items-center space-x-1.5 text-sm">
+                    <span>+ Adicionar Novo Cliente</span>
+                </button>
+                <button onclick="logout()" 
+                        class="bg-transparent hover:bg-red-500/10 text-red-400 border border-red-500/20 hover:border-red-500/40 font-semibold py-2 px-4 rounded-xl transition-all text-sm">
+                    Sair
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main>
+            <div class="mb-6">
+                <h2 class="text-xl font-semibold text-white">Clínicas Cadastradas</h2>
+                <p class="text-xs text-gray-400 mt-1">Gerencie a base de clientes, conexões de WhatsApp e bases de conhecimento.</p>
+            </div>
+
+            <!-- Clinics Grid -->
+            <div id="clinicsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <!-- Dynamically loaded clinic cards go here -->
+            </div>
+
+            <!-- Loading Spinner State -->
+            <div id="loadingState" class="flex flex-col items-center justify-center py-20 space-y-4">
+                <svg class="animate-spin h-10 w-10 text-cyan-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <p class="text-sm font-medium text-gray-400">Carregando clínicas...</p>
+            </div>
+
+            <!-- Empty State -->
+            <div id="emptyState" class="hidden flex-col items-center justify-center py-20 text-center glass-card rounded-2xl border border-white/5 p-8">
+                <svg class="w-16 h-16 text-gray-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path>
+                </svg>
+                <h3 class="text-lg font-semibold text-gray-300">Nenhuma clínica encontrada</h3>
+                <p class="text-sm text-gray-500 mt-1 max-w-xs">Clique no botão "+ Adicionar Novo Cliente" acima para cadastrar a primeira clínica.</p>
+            </div>
+        </main>
+    </div>
+
+    <!-- Premium Glassmorphic Modal -->
+    <div id="orgModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden opacity-0 transition-opacity duration-300">
+        <div class="glass-card w-full max-w-lg rounded-2xl p-6 relative overflow-hidden shadow-2xl transform scale-95 transition-transform duration-300">
+            <!-- Decorative gradient bar at the top -->
+            <div class="absolute top-0 left-0 w-full h-[3px] bg-gradient-to-r from-emerald-500 to-cyan-500"></div>
+
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-lg font-bold text-white">Adicionar Novo Cliente</h2>
+                <button onclick="closeModal()" class="text-gray-400 hover:text-white transition-colors">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            </div>
+
+            <form id="orgForm" class="space-y-4">
+                <div>
+                    <label for="orgName" class="block text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Nome da Clínica</label>
+                    <input type="text" id="orgName" name="name" required placeholder="Ex: Clínica MedVida" 
+                           class="w-full glass-input rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-500">
+                </div>
+
+                <div>
+                    <label for="orgSlug" class="block text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Slug Único</label>
+                    <input type="text" id="orgSlug" name="slug" required placeholder="Ex: medvida" 
+                           class="w-full glass-input rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-500">
+                    <p id="slugError" class="text-xs text-red-400 mt-1 hidden"></p>
+                </div>
+
+                <div>
+                    <label for="orgConnStr" class="block text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1.5">String de Conexão do Banco (Opcional)</label>
+                    <input type="text" id="orgConnStr" name="tenant_connection_string" placeholder="Ex: postgresql+asyncpg://..." 
+                           class="w-full glass-input rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-500 font-mono">
+                    <p class="text-[10px] text-gray-500 mt-1">Deixe em branco para usar o banco PostgreSQL auto-provisionado padrão.</p>
+                </div>
+
+                <div class="flex justify-end space-x-3 mt-6 pt-4 border-t border-gray-800">
+                    <button type="button" onclick="closeModal()" 
+                            class="bg-transparent hover:bg-white/5 border border-white/10 hover:border-white/20 text-gray-300 font-semibold py-2 px-4 rounded-xl transition-all text-sm">
+                        Cancelar
+                    </button>
+                    <button type="submit" id="btnSubmitOrg" disabled
+                            class="bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 disabled:from-emerald-950 disabled:to-emerald-900 disabled:text-gray-600 disabled:cursor-not-allowed text-white font-semibold py-2 px-4 rounded-xl transition-all shadow-md shadow-emerald-500/10 flex items-center space-x-1.5 text-sm">
+                        <svg id="submitSpinner" class="animate-spin h-4 w-4 text-white hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <span id="submitText">Salvar</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Toast Notifications Container -->
+    <div id="toastContainer" class="fixed bottom-5 right-5 space-y-3 z-50"></div>
+
+    <script>
+        // Toast notifications utility
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `p-4 rounded-xl border shadow-xl flex items-center space-x-3 transition-all duration-300 transform translate-y-2 opacity-0 glass-card max-w-sm`;
+            
+            let colorClass = 'text-emerald-400 border-emerald-500/30 bg-emerald-950/10';
+            let dotColor = 'bg-emerald-500';
+            if (type === 'error') {
+                colorClass = 'text-red-400 border-red-500/30 bg-red-950/10';
+                dotColor = 'bg-red-500';
+            } else if (type === 'info') {
+                colorClass = 'text-cyan-400 border-cyan-500/30 bg-cyan-950/10';
+                dotColor = 'bg-cyan-500';
+            }
+
+            toast.innerHTML = `
+                <div class="h-2.5 w-2.5 rounded-full ${dotColor} animate-pulse flex-shrink-0"></div>
+                <div class="flex-grow text-xs font-semibold ${colorClass}">${message}</div>
+            `;
+            
+            container.appendChild(toast);
+            
+            // Animate In
+            setTimeout(() => {
+                toast.classList.remove('translate-y-2', 'opacity-0');
+            }, 10);
+
+            // Animate Out & Remove
+            setTimeout(() => {
+                toast.classList.add('translate-y-2', 'opacity-0');
+                setTimeout(() => toast.remove(), 300);
+            }, 4000);
+        }
+
+        // Token management & logout
+        function logout() {
+            localStorage.removeItem('token');
+            showToast("Você saiu da sessão. Redirecionando...", "info");
+            setTimeout(() => {
+                window.location.replace('/admin/login');
+            }, 800);
+        }
+
+        // Access organization settings view
+        function accessSettings(orgSlug) {
+            window.location.href = `/admin/client?org_id=${orgSlug}&organization_id=${orgSlug}`;
+        }
+
+        // Modal triggers
+        const modal = document.getElementById('orgModal');
+        const modalContent = modal.querySelector('.glass-card');
+        
+        function openModal() {
+            modal.classList.remove('hidden');
+            // Allow display change to apply before opacity/scale transitions
+            setTimeout(() => {
+                modal.classList.remove('opacity-0');
+                modalContent.classList.remove('scale-95');
+            }, 10);
+        }
+
+        function closeModal() {
+            modal.classList.add('opacity-0');
+            modalContent.classList.add('scale-95');
+            setTimeout(() => {
+                modal.classList.add('hidden');
+                // Clear form
+                document.getElementById('orgForm').reset();
+                document.getElementById('slugError').classList.add('hidden');
+                document.getElementById('btnSubmitOrg').disabled = true;
+            }, 300);
+        }
+
+        // Slug validation
+        const orgName = document.getElementById('orgName');
+        const orgSlug = document.getElementById('orgSlug');
+        const slugError = document.getElementById('slugError');
+        const btnSubmitOrg = document.getElementById('btnSubmitOrg');
+        
+        const slugRegex = /^[a-z0-9-_]+$/;
+
+        function validateForm() {
+            const nameVal = orgName.value.trim();
+            const slugVal = orgSlug.value.trim();
+            
+            let isSlugValid = true;
+            
+            if (slugVal === "") {
+                isSlugValid = false;
+                slugError.classList.add('hidden');
+            } else if (!slugRegex.test(slugVal)) {
+                isSlugValid = false;
+                slugError.textContent = "Slug inválido. Apenas letras minúsculas, números, '-' e '_' são permitidos.";
+                slugError.classList.remove('hidden');
+            } else {
+                slugError.classList.add('hidden');
+            }
+
+            btnSubmitOrg.disabled = !(nameVal && slugVal && isSlugValid);
+        }
+
+        orgName.addEventListener('input', validateForm);
+        orgSlug.addEventListener('input', validateForm);
+
+        // Submit Org Form
+        const orgForm = document.getElementById('orgForm');
+        const submitSpinner = document.getElementById('submitSpinner');
+        const submitText = document.getElementById('submitText');
+
+        orgForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const token = localStorage.getItem('token');
+            if (!token) {
+                window.location.replace('/admin/login');
+                return;
+            }
+
+            const name = orgName.value.trim();
+            const slug = orgSlug.value.trim();
+            const connStrVal = document.getElementById('orgConnStr').value.trim();
+
+            const payload = { name, slug };
+            if (connStrVal) {
+                payload.tenant_connection_string = connStrVal;
+            }
+
+            btnSubmitOrg.disabled = true;
+            submitSpinner.classList.remove('hidden');
+            submitText.innerText = "Salvando...";
+
+            try {
+                const response = await fetch('/api/v1/admin/organizations', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (response.status === 201) {
+                    showToast("Clínica adicionada com sucesso!", "success");
+                    closeModal();
+                    await loadOrganizations();
+                } else {
+                    let errMsg = "Erro ao adicionar clínica.";
+                    try {
+                        const errorData = await response.json();
+                        if (errorData && errorData.detail) {
+                            errMsg = errorData.detail;
+                        }
+                    } catch (jsonErr) {}
+                    showToast(errMsg, "error");
+                    btnSubmitOrg.disabled = false;
+                }
+            } catch (err) {
+                showToast("Erro de rede ao adicionar clínica.", "error");
+                btnSubmitOrg.disabled = false;
+            } finally {
+                submitSpinner.classList.add('hidden');
+                submitText.innerText = "Salvar";
+            }
+        });
+
+        // Load organizations list
+        async function loadOrganizations() {
+            const token = localStorage.getItem('token');
+            if (!token) {
+                window.location.replace('/admin/login');
+                return;
+            }
+
+            const grid = document.getElementById('clinicsGrid');
+            const loading = document.getElementById('loadingState');
+            const empty = document.getElementById('emptyState');
+
+            grid.innerHTML = '';
+            loading.classList.remove('hidden');
+            empty.classList.add('hidden');
+
+            try {
+                const response = await fetch('/api/v1/admin/organizations', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (response.status === 401) {
+                    localStorage.removeItem('token');
+                    window.location.replace('/admin/login');
+                    return;
+                }
+
+                if (!response.ok) {
+                    throw new Error("Erro ao carregar organizações");
+                }
+
+                const data = await response.json();
+                loading.classList.add('hidden');
+
+                if (!data || data.length === 0) {
+                    empty.classList.remove('hidden');
+                    return;
+                }
+
+                data.forEach(org => {
+                    const card = document.createElement('div');
+                    card.className = "glass-card rounded-2xl p-6 relative overflow-hidden flex flex-col justify-between h-full border border-white/5 shadow-lg shadow-black/35 hover:scale-[1.02] transition-all duration-300";
+                    
+                    const doctorName = org.doctor_name || 'Não configurado';
+                    const timezone = org.timezone || 'America/Sao_Paulo';
+                    
+                    card.innerHTML = `
+                        <div>
+                            <div class="flex justify-between items-start mb-4">
+                                <h3 class="text-xl font-semibold text-white tracking-tight">${escapeHtml(org.name)}</h3>
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${org.whatsapp_connected ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-gray-500/10 text-gray-400 border border-gray-500/20'}">
+                                    <span class="h-1.5 w-1.5 rounded-full ${org.whatsapp_connected ? 'bg-emerald-400 animate-pulse' : 'bg-gray-400'} mr-1.5"></span>
+                                    ${org.whatsapp_connected ? 'Conectado' : 'Desconectado'}
+                                </span>
+                            </div>
+                            
+                            <div class="space-y-2 text-sm text-gray-400 mb-6">
+                                <div class="flex items-center space-x-2">
+                                    <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                    <span>Fuso Horário: <strong class="text-gray-200">${escapeHtml(timezone)}</strong></span>
+                                </div>
+                                <div class="flex items-center space-x-2">
+                                    <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>
+                                    <span>Médico: <strong class="text-gray-200">${escapeHtml(doctorName)}</strong></span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <button onclick="accessSettings('${org.id}')" class="w-full bg-gradient-to-r from-cyan-500 to-cyan-600 hover:from-cyan-400 hover:to-cyan-500 text-white font-semibold py-2.5 px-4 rounded-xl transition-all shadow-md shadow-cyan-500/10 flex items-center justify-center space-x-2 text-sm">
+                            <span>Acessar Configurações</span>
+                        </button>
+                    `;
+                    grid.appendChild(card);
+                });
+
+            } catch (err) {
+                loading.classList.add('hidden');
+                empty.classList.remove('hidden');
+                showToast("Erro ao carregar lista de clínicas.", "error");
+            }
+        }
+
+        // Helpers
+        function escapeHtml(text) {
+            if (!text) return '';
+            return text
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        // Initialize dashboard loading
+        window.addEventListener('DOMContentLoaded', loadOrganizations);
+    </script>
+</body>
+</html>

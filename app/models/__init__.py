@@ -6,5 +6,7 @@ from app.models.base import Base
 from app.models.settings import Settings
 from app.models.whatsapp import MessageBuffer, ClientData
 from app.models.agent_config import AgentConfig
+from app.models.organization import Organization
 
-__all__ = ["Base", "Settings", "MessageBuffer", "ClientData", "AgentConfig"]
+__all__ = ["Base", "Settings", "MessageBuffer", "ClientData", "AgentConfig", "Organization"]
+

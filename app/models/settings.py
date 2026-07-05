@@ -1,3 +1,4 @@
+from typing import Optional
 from sqlalchemy import String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -22,6 +23,48 @@ class Settings(Base):
         Text,
         nullable=False,
         comment="Encrypted tenant database connection string"
+    )
+
+    openai_key_encrypted: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Encrypted OpenAI API key"
+    )
+
+    gemini_key_encrypted: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Encrypted Gemini API key"
+    )
+
+    anthropic_key_encrypted: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Encrypted Anthropic API key"
+    )
+
+    webhook_type: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        nullable=True,
+        comment="Webhook integration type (evolution or meta)"
+    )
+
+    webhook_url_encrypted: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Encrypted webhook destination URL"
+    )
+
+    webhook_key_encrypted: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Encrypted webhook security token/key"
+    )
+
+    webhook_phone_id_encrypted: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Encrypted webhook phone number ID"
     )
 
     def __repr__(self) -> str:
