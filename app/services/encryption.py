@@ -70,3 +70,32 @@ def decrypt_data(encrypted_data_base64: str) -> str:
         return decrypted_bytes.decode("utf-8")
     except UnicodeDecodeError:
         raise ValueError("Decryption succeeded but content is not valid UTF-8")
+
+
+def encrypt_data(plaintext: str) -> str:
+    """
+    Encrypts a plaintext string using AES-256-GCM.
+    Returns a Base64-encoded string with the structure: IV (12 bytes) + Ciphertext + GCM Tag (16 bytes).
+    Passphrase is read from the ENCRYPTION_KEY environment variable.
+
+    Raises:
+        ValueError: If ENCRYPTION_KEY is unset or encryption fails.
+    """
+    passphrase = os.getenv("ENCRYPTION_KEY")
+    if not passphrase:
+        raise ValueError("ENCRYPTION_KEY environment variable is not set")
+
+    # Derive AES-256 key from passphrase
+    key = derive_key(passphrase)
+
+    # Generate a random 12-byte IV
+    iv = os.urandom(IV_LENGTH)
+
+    # Encrypt using AES-GCM (appends 16-byte auth tag automatically)
+    aesgcm = AESGCM(key)
+    ciphertext_with_tag = aesgcm.encrypt(iv, plaintext.encode("utf-8"), None)
+
+    # Concatenate IV + ciphertext+tag, then Base64-encode
+    raw_payload = iv + ciphertext_with_tag
+    return base64.b64encode(raw_payload).decode("utf-8")
+
