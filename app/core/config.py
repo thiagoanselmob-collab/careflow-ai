@@ -24,6 +24,14 @@ class Settings(BaseSettings):
     langchain_api_key: Optional[str] = Field(default=None, validation_alias="LANGCHAIN_API_KEY")
     langchain_project: Optional[str] = Field(default=None, validation_alias="LANGCHAIN_PROJECT")
 
+    # Admin authentication
+    admin_username: str = Field(default="admin@careflow.ai", validation_alias="ADMIN_USERNAME")
+    admin_password: str = Field(default="changeme", validation_alias="ADMIN_PASSWORD")
+
+    # JWT configuration
+    jwt_secret_key: str = Field(default="insecure-dev-secret-change-in-prod", validation_alias="JWT_SECRET_KEY")
+    jwt_expire_hours: int = Field(default=24, validation_alias="JWT_EXPIRE_HOURS")
+
 
     model_config = SettingsConfigDict(
         env_file=".env",
