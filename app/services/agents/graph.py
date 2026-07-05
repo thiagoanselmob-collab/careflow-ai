@@ -160,7 +160,7 @@ class RoutingDecision(BaseModel):
     """
     Structured output schema for Supervisor routing decisions.
     """
-    next_node: Literal["crc_sdr_node", "agenda_node", "rag_node", "END"] = Field(
+    next_node: Literal["crc_sdr_node", "agenda_node", "END"] = Field(
         ...,
         description="The next node to route the conversation to."
     )
@@ -215,8 +215,63 @@ async def _async_escalate_human(tenant_id: Optional[str], patient_phone: Optiona
             logger.error(f"[Escalation] Failed to patch CRM appointment status: {e}")
 
 
-@log_node_execution("supervisor_node")
-def supervisor_node(state: AgentState, config: Optional[RunnableConfig] = None) -> dict:
+async def get_agent_config(tenant_id: str, agent_type: str) -> Optional["AgentConfig"]:
+    """
+    Acquire tenant session and retrieve the AgentConfig for the specified agent type.
+    """
+    from app.core.tenant_database import tenant_db_manager
+    from app.models.agent_config import AgentConfig
+    from sqlalchemy import select
+
+    if not tenant_id:
+        return None
+
+    try:
+        async with await tenant_db_manager.get_tenant_session(tenant_id) as session:
+            stmt = select(AgentConfig).where(AgentConfig.agent_type == agent_type.lower())
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none()
+    except Exception as e:
+        logger.warning(f"Error fetching agent config for tenant {tenant_id}, agent_type {agent_type}: {e}")
+        return None
+
+
+def get_llm_from_config(agent_config: Optional["AgentConfig"]):
+    """
+    Returns the appropriate LangChain chat model based on the AgentConfig.
+    """
+    if agent_config and agent_config.llm_provider and agent_config.llm_model:
+        provider = agent_config.llm_provider.lower()
+        model = agent_config.llm_model
+        if provider == "google":
+            from langchain_google_genai import ChatGoogleGenerativeAI
+            return ChatGoogleGenerativeAI(model=model)
+        elif provider == "openai":
+            from langchain_openai import ChatOpenAI
+            return ChatOpenAI(model=model)
+        elif provider == "anthropic":
+            from langchain_anthropic import ChatAnthropic
+            return ChatAnthropic(model=model)
+            
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    return ChatGoogleGenerativeAI(model="gemini-1.5-flash")
+
+
+async def _call_llm_structured(structured_llm, prompt):
+    if hasattr(structured_llm, "ainvoke"):
+        return await structured_llm.ainvoke(prompt)
+    else:
+        return structured_llm.invoke(prompt)
+
+
+async def _call_llm(llm, chat_prompt):
+    if hasattr(llm, "ainvoke"):
+        return await llm.ainvoke(chat_prompt)
+    else:
+        return llm.invoke(chat_prompt)
+
+
+async def _async_supervisor_node(state: AgentState, config: Optional[RunnableConfig] = None) -> dict:
     """
     Evaluates the conversation history and collected data, and decides the next node.
     """
@@ -231,16 +286,20 @@ def supervisor_node(state: AgentState, config: Optional[RunnableConfig] = None) 
             "action_required": False
         }
     
-    # 2. Get LLM instance
-    llm = None
-    if config and "configurable" in config:
-        llm = config["configurable"].get("llm")
+    # 2. Setup config and variables
+    configurable = config.get("configurable", {}) if config else {}
+    tenant_id = configurable.get("tenant_id")
     
+    agent_config = None
+    if tenant_id:
+        agent_config = await get_agent_config(tenant_id, "supervisor")
+
+    # 3. Get LLM instance
+    llm = configurable.get("llm")
     if not llm:
-        from langchain_google_genai import ChatGoogleGenerativeAI
-        llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
+        llm = get_llm_from_config(agent_config)
     
-    # 3. Format the conversation and collected data
+    # 4. Format the conversation and collected data
     messages_str = ""
     for msg in messages:
         messages_str += f"{msg.role.upper()}: {msg.content}\n"
@@ -256,26 +315,31 @@ def supervisor_node(state: AgentState, config: Optional[RunnableConfig] = None) 
         f"Wants to Schedule: {wants_to_schedule}\n"
     )
     
+    if agent_config and agent_config.system_prompt:
+        base_prompt = agent_config.system_prompt
+    else:
+        base_prompt = (
+            "You are the central Supervisor node in a healthcare chatbot system (CareFlow AI).\n"
+            "Your task is to analyze the conversation history and collected data, "
+            "and decide which node to route the conversation to next.\n\n"
+            "Routing Criteria:\n"
+            "- 'crc_sdr_node': Use this for new leads, if patient's name or CPF is missing (both are required "
+            "for scheduling), for casual messages, or for general greetings.\n"
+            "- 'agenda_node': Use this if the user has an explicit intent to schedule, cancel, or reschedule "
+            "a consultation.\n"
+            "- 'END': Use this only if the interaction is fully completed or the user is saying goodbye/no further action is needed."
+        )
+
     prompt = (
-        "You are the central Supervisor node in a healthcare chatbot system (CareFlow AI).\n"
-        "Your task is to analyze the conversation history and collected data, "
-        "and decide which node to route the conversation to next.\n\n"
-        "Routing Criteria:\n"
-        "- 'crc_sdr_node': Use this for new leads, if patient's name or CPF is missing (both are required "
-        "for scheduling), for casual messages, or for general greetings.\n"
-        "- 'agenda_node': Use this if the user has an explicit intent to schedule, cancel, or reschedule "
-        "a consultation.\n"
-        "- 'rag_node': Use this if the user asks specific institutional questions, "
-        "such as insurance plans, procedures, specialties, prices, or doctor info.\n"
-        "- 'END': Use this only if the interaction is fully completed or the user is saying goodbye/no further action is needed.\n\n"
+        f"{base_prompt}\n\n"
         f"Conversation History:\n{messages_str}\n"
         f"Collected Data:\n{collected_data_str}\n"
         "Make a routing decision."
     )
     
-    # 4. Call LLM with structured output
+    # 5. Call LLM with structured output
     structured_llm = llm.with_structured_output(RoutingDecision)
-    decision = structured_llm.invoke(prompt)
+    decision = await _call_llm_structured(structured_llm, prompt)
     
     next_phase = None
     suggested_action = None
@@ -292,25 +356,10 @@ def supervisor_node(state: AgentState, config: Optional[RunnableConfig] = None) 
     
     # Check if escalation is requested
     if next_phase == "human" or suggested_action == "escalar_humano":
-        configurable = config.get("configurable", {}) if config else {}
-        tenant_id = configurable.get("tenant_id")
         patient_phone = configurable.get("patient_phone")
         original_appt_id = state.get("original_appointment_id")
         
-        # Execute escalate helper sync
-        coro = _async_escalate_human(tenant_id, patient_phone, original_appt_id)
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-        if loop.is_running():
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(asyncio.run, coro)
-                future.result()
-        else:
-            loop.run_until_complete(coro)
+        await _async_escalate_human(tenant_id, patient_phone, original_appt_id)
             
         return {
             "bot_active": False,
@@ -323,6 +372,25 @@ def supervisor_node(state: AgentState, config: Optional[RunnableConfig] = None) 
         "action_required": False if next_node == "END" else True
     }
 
+
+@log_node_execution("supervisor_node")
+def supervisor_node(state: AgentState, config: Optional[RunnableConfig] = None) -> dict:
+    """
+    Evaluates the conversation history and collected data, and decides the next node.
+    """
+    coro = _async_supervisor_node(state, config)
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+    if loop.is_running():
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(asyncio.run, coro)
+            return future.result()
+    else:
+        return loop.run_until_complete(coro)
 
 
 class SDROutputSchema(BaseModel):
@@ -347,19 +415,9 @@ class SDROutputSchema(BaseModel):
     )
 
 
-DEFAULT_SDR_PROFILE = {
-    "doctor_name": "Dr. André Seabra",
-    "clinic_name": "Clínica do Dr. André Seabra",
-    "specialty": "Reprogramação Metabólica e Saúde Integrativa",
-    "focus": "Reprogramação metabólica, equilíbrio hormonal, emagrecimento definitivo e restabelecimento da saúde integrativa. Não trabalha com dietas de gaveta ou prescrições genéricas.",
-    "objection_script": "A consulta com o Dr. André Seabra é, na verdade, um programa completo de reprogramação metabólica. Ele faz uma investigação profunda de exames de sangue, taxa metabólica e hormônios para criar um plano de emagrecimento definitivo focado na raiz do problema, e não apenas uma dieta comum."
-}
-
-
-@log_node_execution("crc_sdr_node")
-def crc_sdr_node(state: AgentState, config: Optional[RunnableConfig] = None) -> dict:
+async def _async_crc_sdr_node(state: AgentState, config: Optional[RunnableConfig] = None) -> dict:
     """
-    CRC/SDR node: dynamic multi-tenant logic using ChatAnthropic and structured extraction.
+    CRC/SDR node: dynamic multi-tenant logic using structured extraction.
     """
     print("[Node Activation] crc_sdr_node activated")
     logger.info("crc_sdr_node activated")
@@ -368,7 +426,12 @@ def crc_sdr_node(state: AgentState, config: Optional[RunnableConfig] = None) -> 
     configurable = config.get("configurable", {}) if config else {}
     sdr_llm = configurable.get("sdr_llm")
     supervisor_llm = configurable.get("llm")
+    tenant_id = configurable.get("tenant_id")
     
+    agent_config = None
+    if tenant_id:
+        agent_config = await get_agent_config(tenant_id, "sdr")
+
     is_mock = False
     if supervisor_llm:
         class_name = supervisor_llm.__class__.__name__
@@ -393,13 +456,17 @@ def crc_sdr_node(state: AgentState, config: Optional[RunnableConfig] = None) -> 
     # 2. Load the profile dynamically
     profile = configurable.get("sdr_profile")
     if not profile or not isinstance(profile, dict):
-        profile = DEFAULT_SDR_PROFILE
+        profile = {
+            "doctor_name": "Dr. André Seabra",
+            "clinic_name": "Clínica do Dr. André Seabra",
+            "specialty": "Reprogramação Metabólica e Saúde Integrativa",
+            "focus": "Reprogramação metabólica, equilíbrio hormonal, emagrecimento definitivo e restabelecimento da saúde integrativa. Não trabalha com dietas de gaveta ou prescrições genéricas.",
+            "objection_script": "A consulta com o Dr. André Seabra é, na verdade, um programa completo de reprogramação metabólica. Ele faz uma investigação profunda de exames de sangue, taxa metabólica e hormônios para criar um plano de emagrecimento definitivo focado na raiz do problema, e não apenas uma dieta comum."
+        }
         
     # 3. Instantiate sdr_llm if not configured
     if not sdr_llm:
-        from langchain_anthropic import ChatAnthropic
-        # Default to Claude 3.5 Sonnet
-        sdr_llm = ChatAnthropic(model="claude-3-5-sonnet-20241022")
+        sdr_llm = get_llm_from_config(agent_config)
         
     # 4. Structured Output
     structured_sdr_llm = sdr_llm.with_structured_output(SDROutputSchema)
@@ -412,35 +479,73 @@ def crc_sdr_node(state: AgentState, config: Optional[RunnableConfig] = None) -> 
         
     collected_data = state.get("collected_data", CollectedDataSchema())
     
+    if agent_config and agent_config.system_prompt:
+        system_prompt = agent_config.system_prompt
+        try:
+            system_prompt = system_prompt.format(
+                clinic_name=profile.get('clinic_name'),
+                doctor_name=profile.get('doctor_name'),
+                specialty=profile.get('specialty'),
+                focus=profile.get('focus'),
+                objection_script=profile.get('objection_script'),
+                collected_name=collected_data.full_name or '',
+                collected_cpf=collected_data.cpf or ''
+            )
+        except Exception:
+            pass
+    else:
+        system_prompt = (
+            "You are the SDR (Sales Development Representative) agent for a premium healthcare clinic.\n"
+            "Your mission is to welcome new leads, build value around the medical care, "
+            "and progressively collect details required for the secure patient record (name and CPF).\n\n"
+            f"Clinic Profile Details:\n"
+            f"- Clinic Name: {profile.get('clinic_name')}\n"
+            f"- Doctor Name: {profile.get('doctor_name')}\n"
+            f"- Specialty: {profile.get('specialty')}\n"
+            f"- Focus: {profile.get('focus')}\n"
+            f"- Objection Handling Script: {profile.get('objection_script')}\n\n"
+            "Guidelines:\n"
+            "- Identify as a premium health assistant, warm and professional.\n"
+            "- Tom de voz: Premium, extremely professional, empathetic, and warm.\n"
+            "- Style: Use short, objective messages, ideal for quick reading on WhatsApp.\n"
+            "- WhatsApp Style: Once the user's name is known, address them by name in every subsequent message.\n"
+            "- Progressive Data Collection:\n"
+            "  - Do NOT ask for CPF right away. Ask for the user's full name first if not present.\n"
+            "  - If the user wants to schedule or proceed, then ask for CPF. Explain elegantly that it is needed to open their secure medical record.\n"
+            f"  - Currently collected name in state: '{collected_data.full_name or ''}'\n"
+            f"  - Currently collected CPF in state: '{collected_data.cpf or ''}'\n"
+            "  - Do not re-request any info that is already collected in state.\n"
+            "- Objection Handling:\n"
+            "  - If the user asks for prices or insurance agreements, do NOT simply list them immediately. Use the Objection Handling Script to explain the deep metabolic reprogramming program first to build value, then ask for their health objective."
+        )
+
+    # Check user query for institutional keywords and retrieve knowledge
+    user_messages = [m for m in messages if m.role == "user"]
+    query = user_messages[-1].content if user_messages else ""
+    query_lower = query.lower()
+    
+    keywords = ['preço', 'valor', 'quanto custa', 'convênio', 'plano', 'aceita', 'regra', 'funcionamento', 'procedimento']
+    knowledge_context = ""
+    if any(kw in query_lower for kw in keywords) and tenant_id:
+        try:
+            chunks = await buscar_conhecimento(query, tenant_id, limit=3)
+            if chunks:
+                knowledge_context = "\n\nInformações adicionais obtidas da base de conhecimento da clínica:\n" + "\n".join([
+                    f"- {chunk['content']}" for chunk in chunks
+                ])
+        except Exception as e:
+            logger.warning(f"Failed to fetch knowledge in crc_sdr_node: {e}")
+
     prompt = (
-        "You are the SDR (Sales Development Representative) agent for a premium healthcare clinic.\n"
-        "Your mission is to welcome new leads, build value around the medical care, "
-        "and progressively collect details required for the secure patient record (name and CPF).\n\n"
-        f"Clinic Profile Details:\n"
-        f"- Clinic Name: {profile.get('clinic_name')}\n"
-        f"- Doctor Name: {profile.get('doctor_name')}\n"
-        f"- Specialty: {profile.get('specialty')}\n"
-        f"- Focus: {profile.get('focus')}\n"
-        f"- Objection Handling Script: {profile.get('objection_script')}\n\n"
-        "Guidelines:\n"
-        "- Identify as a premium health assistant, warm and professional.\n"
-        "- Tom de voz: Premium, extremely professional, empathetic, and warm.\n"
-        "- Style: Use short, objective messages, ideal for quick reading on WhatsApp.\n"
-        "- WhatsApp Style: Once the user's name is known, address them by name in every subsequent message.\n"
-        "- Progressive Data Collection:\n"
-        "  - Do NOT ask for CPF right away. Ask for the user's full name first if not present.\n"
-        "  - If the user wants to schedule or proceed, then ask for CPF. Explain elegantly that it is needed to open their secure medical record.\n"
-        f"  - Currently collected name in state: '{collected_data.full_name or ''}'\n"
-        f"  - Currently collected CPF in state: '{collected_data.cpf or ''}'\n"
-        "  - Do not re-request any info that is already collected in state.\n"
-        "- Objection Handling:\n"
-        "  - If the user asks for prices or insurance agreements, do NOT simply list them immediately. Use the Objection Handling Script to explain the deep metabolic reprogramming program first to build value, then ask for their health objective.\n\n"
+        f"{system_prompt}\n"
         f"Conversation History:\n{messages_str}\n"
         "Respond to the patient and perform structured extraction of fields: response_message, extracted_name, extracted_cpf, and wants_to_schedule."
     )
+    if knowledge_context:
+        prompt += f"\n{knowledge_context}"
     
     # 6. Invoke LLM and extract results
-    decision = structured_sdr_llm.invoke(prompt)
+    decision = await _call_llm_structured(structured_sdr_llm, prompt)
     
     if isinstance(decision, dict):
         response_message = decision.get("response_message", "")
@@ -484,6 +589,26 @@ def crc_sdr_node(state: AgentState, config: Optional[RunnableConfig] = None) -> 
         "next_node": None,
         "action_required": False
     }
+
+
+@log_node_execution("crc_sdr_node")
+def crc_sdr_node(state: AgentState, config: Optional[RunnableConfig] = None) -> dict:
+    """
+    CRC/SDR node: dynamic multi-tenant logic using structured extraction.
+    """
+    coro = _async_crc_sdr_node(state, config)
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+    if loop.is_running():
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(asyncio.run, coro)
+            return future.result()
+    else:
+        return loop.run_until_complete(coro)
 
 
 class AgendaOutputSchema(BaseModel):
@@ -599,13 +724,13 @@ async def calculate_scarcity_slots(
             else:
                 # 3. Fallback: Search forward day-by-day
                 for i in range(2, MAX_SEARCH_DAYS):
-                    check_date = local_today + timedelta(days=i)
-                    slots = await get_available_slots_on_date(
-                        client, check_date, doctor_id, anchor_dt, tenant_id
-                    )
-                    if slots:
-                        slot1 = slots[0]
-                        break
+                     check_date = local_today + timedelta(days=i)
+                     slots = await get_available_slots_on_date(
+                         client, check_date, doctor_id, anchor_dt, tenant_id
+                     )
+                     if slots:
+                         slot1 = slots[0]
+                         break
 
         # --- Slot 2 Calculation (Opção Escassa) ---
         slot2: Optional[datetime] = None
@@ -654,6 +779,10 @@ async def _async_agenda_node(state: AgentState, config: Optional[RunnableConfig]
     configurable = config.get("configurable", {}) if config else {}
     tenant_id = configurable.get("tenant_id")
     
+    agent_config = None
+    if tenant_id:
+        agent_config = await get_agent_config(tenant_id, "agenda")
+
     # Instantiate client (check if custom client provided for testing)
     client = configurable.get("medflow_client") or MedflowClient(tenant_id=tenant_id)
     
@@ -684,8 +813,7 @@ async def _async_agenda_node(state: AgentState, config: Optional[RunnableConfig]
     # 4. Invoke LLM
     llm = configurable.get("agenda_llm") or configurable.get("llm")
     if not llm:
-        from langchain_google_genai import ChatGoogleGenerativeAI
-        llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
+        llm = get_llm_from_config(agent_config)
 
     # Build conversation history
     messages = state.get("messages", [])
@@ -693,20 +821,49 @@ async def _async_agenda_node(state: AgentState, config: Optional[RunnableConfig]
     for msg in messages:
         messages_str += f"{msg.role.upper()}: {msg.content}\n"
 
-    system_prompt = (
-        "Você é o Agente de Agendamento (Agenda Agent) do CareFlow AI, operando em português.\n"
-        "Sua função é auxiliar o paciente a marcar, confirmar ou cancelar consultas médicas.\n\n"
-        f"Âncora Temporal do Sistema (data/hora atual): {anchor_info}\n"
-        f"Data de hoje: {anchor_dt.date().isoformat()}\n\n"
-        "Regras de Escassez e Horários Disponíveis:\n"
-        f"- Opção 1 (Próxima): {slot1_str} (Se o paciente quiser o horário mais próximo disponível)\n"
-        f"- Opção 2 (Escassa): {slot2_str} (Se o paciente preferir uma opção mais distante para se planejar)\n\n"
-        "Diretrizes:\n"
-        "1. Traduza termos relativos (ex.: 'amanhã', 'segunda que vem', 'à tarde') em datas absolutas YYYY-MM-DD usando a Âncora Temporal.\n"
-        "2. NUNCA confirme ou crie um agendamento (action='book' ou 'confirm' or 'cancel') sem o consentimento explícito do paciente. Se o paciente apenas demonstrou interesse, sugeriu um horário, ou você está propondo os horários, use action='none'.\n"
-        "3. Se o paciente escolher um dos horários propostos ou concordar com uma data/hora específica, e der consentimento explícito (ex.: 'Sim, pode agendar nesse horário', 'Confirmado', 'Quero esse das 17h30'), configure a 'action' correspondente e preencha os campos 'date' e 'time'.\n"
-        "4. Responda sempre de forma profissional, acolhedora e concisa (estilo WhatsApp).\n"
-    )
+    if agent_config and agent_config.system_prompt:
+        system_prompt = agent_config.system_prompt
+        try:
+            system_prompt = system_prompt.format(
+                anchor_info=anchor_info,
+                anchor_date=anchor_dt.date().isoformat(),
+                slot1_str=slot1_str,
+                slot2_str=slot2_str
+            )
+        except Exception:
+            pass
+    else:
+        system_prompt = (
+            "Você é o Agente de Agendamento (Agenda Agent) do CareFlow AI, operando em português.\n"
+            "Sua função é auxiliar o paciente a marcar, confirmar ou cancelar consultas médicas.\n\n"
+            f"Âncora Temporal do Sistema (data/hora atual): {anchor_info}\n"
+            f"Data de hoje: {anchor_dt.date().isoformat()}\n\n"
+            "Regras de Escassez e Horários Disponíveis:\n"
+            f"- Opção 1 (Próxima): {slot1_str} (Se o paciente quiser o horário mais próximo disponível)\n"
+            f"- Opção 2 (Escassa): {slot2_str} (Se o paciente preferir uma opção mais distante para se planejar)\n\n"
+            "Diretrizes:\n"
+            "1. Traduza termos relativos (ex.: 'amanhã', 'segunda que vem', 'à tarde') em datas absolutas YYYY-MM-DD usando a Âncora Temporal.\n"
+            "2. NUNCA confirme ou crie um agendamento (action='book' ou 'confirm' or 'cancel') sem o consentimento explícito do paciente. Se o paciente apenas demonstrou interesse, sugeriu um horário, ou você está propondo os horários, use action='none'.\n"
+            "3. Se o paciente escolher um dos horários propostos ou concordar com uma data/hora específica, e der consentimento explícito (ex.: 'Sim, pode agendar nesse horário', 'Confirmado', 'Quero esse das 17h30'), configure a 'action' correspondente e preencha os campos 'date' e 'time'.\n"
+            "4. Responda sempre de forma profissional, acolhedora e concisa (estilo WhatsApp)."
+        )
+
+    # Check user query for institutional keywords and retrieve knowledge
+    user_messages = [m for m in messages if m.role == "user"]
+    query = user_messages[-1].content if user_messages else ""
+    query_lower = query.lower()
+    
+    keywords = ['preço', 'valor', 'quanto custa', 'convênio', 'plano', 'aceita', 'regra', 'funcionamento', 'procedimento']
+    knowledge_context = ""
+    if any(kw in query_lower for kw in keywords) and tenant_id:
+        try:
+            chunks = await buscar_conhecimento(query, tenant_id, limit=3)
+            if chunks:
+                knowledge_context = "\n\nInformações adicionais obtidas da base de conhecimento da clínica:\n" + "\n".join([
+                    f"- {chunk['content']}" for chunk in chunks
+                ])
+        except Exception as e:
+            logger.warning(f"Failed to fetch knowledge in agenda_node: {e}")
 
     prompt = (
         f"{system_prompt}\n"
@@ -717,9 +874,11 @@ async def _async_agenda_node(state: AgentState, config: Optional[RunnableConfig]
         f"- Médico preferencial: {collected_data.preferred_doctor or 'Não informado'}\n\n"
         "Retorne a resposta estruturada contendo: response_message, action, date, time e doctor_id."
     )
+    if knowledge_context:
+        prompt += f"\n{knowledge_context}"
 
     structured_llm = llm.with_structured_output(AgendaOutputSchema)
-    decision = structured_llm.invoke(prompt)
+    decision = await _call_llm_structured(structured_llm, prompt)
 
     # Adapt if the returned decision is from the old mock supervisor (RoutingDecision)
     if hasattr(decision, "next_node") and not hasattr(decision, "response_message"):
@@ -864,10 +1023,6 @@ def agenda_node(state: AgentState, config: Optional[RunnableConfig] = None) -> d
     Agenda node: handles scheduling logic, demographics validation, explicit confirmation,
     scarcity slot generation, and calls MedflowClient for bookings/confirmations/cancellations.
     """
-    print("[Node Activation] agenda_node activated")
-    logger.info("agenda_node activated")
-    
-    # Run the asynchronous implementation synchronously
     coro = _async_agenda_node(state, config)
     try:
         loop = asyncio.get_event_loop()
@@ -1103,7 +1258,6 @@ workflow = StateGraph(AgentState)
 workflow.add_node("supervisor", supervisor_node)
 workflow.add_node("crc_sdr_node", crc_sdr_node)
 workflow.add_node("agenda_node", agenda_node)
-workflow.add_node("rag_node", rag_node)
 
 # Set entry point
 workflow.set_entry_point("supervisor")
@@ -1114,7 +1268,7 @@ def check_next_node(state: AgentState) -> str:
     Evaluates next_node state key and routes.
     """
     n = state.get("next_node")
-    if n in ["crc_sdr_node", "agenda_node", "rag_node"]:
+    if n in ["crc_sdr_node", "agenda_node"]:
         return n
     return END
 
@@ -1126,7 +1280,6 @@ workflow.add_conditional_edges(
     {
         "crc_sdr_node": "crc_sdr_node",
         "agenda_node": "agenda_node",
-        "rag_node": "rag_node",
         END: END
     }
 )
@@ -1134,7 +1287,6 @@ workflow.add_conditional_edges(
 # Add edges back from stub nodes to supervisor (hub-and-spoke setup)
 workflow.add_edge("crc_sdr_node", "supervisor")
 workflow.add_edge("agenda_node", "supervisor")
-workflow.add_edge("rag_node", "supervisor")
 
 # Compile graph
 graph = workflow.compile()

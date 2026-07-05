@@ -283,10 +283,12 @@ async def test_init_tenant_db_postgresql_fallback():
 
 @pytest.mark.asyncio
 async def test_init_tenant_db_postgresql_all_fail():
-    """Verify _init_tenant_db fails gracefully and suppresses exceptions when all Postgres creation attempts fail."""
+    """Verify _init_tenant_db propagates exceptions when all Postgres creation attempts fail."""
     engine = FakePostgresEngine(dialect_name="postgresql", raise_on_first=True, raise_on_second=True)
-    await _init_tenant_db(engine)  # Should not raise exception
+    with pytest.raises(Exception, match="Fallback table creation error"):
+        await _init_tenant_db(engine)
     assert len(engine.executed) > 0
+
 
 
 @pytest.mark.asyncio

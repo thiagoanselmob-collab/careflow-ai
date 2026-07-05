@@ -34,7 +34,7 @@ class MockStructuredLLM:
         elif "marcar" in history_section or "agenda" in history_section:
             return RoutingDecision(next_node="agenda_node", reasoning="Scheduling intent")
         elif "convênio" in history_section or "aceita" in history_section or "preço" in history_section or "procedimento" in history_section:
-            return RoutingDecision(next_node="rag_node", reasoning="RAG query")
+            return RoutingDecision(next_node="crc_sdr_node", reasoning="RAG query")
         elif "oi" in history_section or "olá" in history_section or "tudo bem" in history_section:
             return RoutingDecision(next_node="crc_sdr_node", reasoning="Greeting")
         
@@ -77,7 +77,7 @@ def test_route_scheduling_intent(graph_config):
 
 
 def test_route_rag_intent(graph_config):
-    # Input "Quais convênios aceitam?" -> routes to rag_node
+    # Input "Quais convênios aceitam?" -> routes to crc_sdr_node
     session = SessionSchema(
         messages_history=[
             MessageSchema(role="user", content="Quais convênios aceitam?")
@@ -93,7 +93,7 @@ def test_route_rag_intent(graph_config):
     
     assert final_state["next_node"] == "END"
     assert len(final_state["messages"]) == 2
-    assert "RAG Agent" in final_state["messages"][1].content
+    assert "CRC/SDR Agent" in final_state["messages"][1].content
 
 
 def test_route_greeting_intent(graph_config):
@@ -220,4 +220,125 @@ def test_sdr_node_with_custom_mock_sdr_llm():
     assert result["collected_data"].full_name == "Carlos Silva"  # Original name is preserved
     assert result["collected_data"].cpf == "111.111.111-11"  # CPF is updated
     assert result["wants_to_schedule"] is True
+
+
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from app.core.tenant_database import tenant_db_manager, _init_tenant_db
+from app.models.agent_config import AgentConfig
+from app.services.agents.graph import get_agent_config, get_llm_from_config
+
+
+@pytest_asyncio.fixture
+async def mock_tenant_db():
+    # Set up in-memory tenant database
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False, future=True)
+    await _init_tenant_db(engine)
+    
+    # Register mock tenant in connection manager cache
+    tenant_db_manager._engines["test_org_graph"] = engine
+    tenant_db_manager._sessionmakers["test_org_graph"] = async_sessionmaker(
+        bind=engine,
+        expire_on_commit=False,
+        class_=AsyncSession
+    )
+    
+    yield engine
+    
+    # Teardown
+    await engine.dispose()
+    tenant_db_manager._engines.pop("test_org_graph", None)
+    tenant_db_manager._sessionmakers.pop("test_org_graph", None)
+
+
+@pytest.mark.asyncio
+async def test_get_agent_config(mock_tenant_db):
+    # Test retrieving None when no config row is present
+    cfg = await get_agent_config("test_org_graph", "sdr")
+    assert cfg is None
+
+    # Insert mock config row
+    sessionmaker = tenant_db_manager._sessionmakers["test_org_graph"]
+    async with sessionmaker() as session:
+        new_config = AgentConfig(
+            agent_type="sdr",
+            system_prompt="Custom SDR Prompt",
+            llm_provider="openai",
+            llm_model="gpt-4",
+            is_active=True
+        )
+        session.add(new_config)
+        await session.commit()
+
+    # Test retrieving successfully when row is present
+    cfg = await get_agent_config("test_org_graph", "sdr")
+    assert cfg is not None
+    assert cfg.agent_type == "sdr"
+    assert cfg.system_prompt == "Custom SDR Prompt"
+    assert cfg.llm_provider == "openai"
+    assert cfg.llm_model == "gpt-4"
+
+
+def test_get_llm_from_config(monkeypatch):
+    monkeypatch.setenv("GOOGLE_API_KEY", "dummy-google-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "dummy-openai-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy-anthropic-key")
+
+    # 1. Fallback to Google
+    llm = get_llm_from_config(None)
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    assert isinstance(llm, ChatGoogleGenerativeAI)
+    assert llm.model == "gemini-1.5-flash"
+
+    # 2. Google provider
+    cfg_google = AgentConfig(
+        agent_type="supervisor",
+        llm_provider="google",
+        llm_model="gemini-pro"
+    )
+    llm = get_llm_from_config(cfg_google)
+    assert isinstance(llm, ChatGoogleGenerativeAI)
+    assert llm.model == "gemini-pro"
+
+    # 3. OpenAI provider
+    cfg_openai = AgentConfig(
+        agent_type="supervisor",
+        llm_provider="openai",
+        llm_model="gpt-4"
+    )
+    llm = get_llm_from_config(cfg_openai)
+    from langchain_openai import ChatOpenAI
+    assert isinstance(llm, ChatOpenAI)
+    model_name = getattr(llm, "model_name", getattr(llm, "model", None))
+    assert model_name == "gpt-4"
+
+    # 4. Anthropic provider
+    cfg_anthropic = AgentConfig(
+        agent_type="supervisor",
+        llm_provider="anthropic",
+        llm_model="claude-3"
+    )
+    llm = get_llm_from_config(cfg_anthropic)
+    from langchain_anthropic import ChatAnthropic
+    assert isinstance(llm, ChatAnthropic)
+    assert llm.model == "claude-3"
+
+
+def test_graph_does_not_contain_rag_node():
+    # Verify rag_node is not in the compiled graph nodes
+    assert "rag_node" not in graph.nodes
+
+
+def test_routing_decision_does_not_accept_rag_node():
+    from pydantic import ValidationError
+    
+    # Valid next_nodes
+    for node in ["crc_sdr_node", "agenda_node", "END"]:
+        decision = RoutingDecision(next_node=node, reasoning="Test")
+        assert decision.next_node == node
+        
+    # Invalid next_node
+    with pytest.raises(ValidationError):
+        RoutingDecision(next_node="rag_node", reasoning="Test")
+
 

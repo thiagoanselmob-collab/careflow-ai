@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from typing import Dict
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
@@ -6,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from app.core.database import SessionLocal as default_sessionmaker
 from app.models.settings import Settings
 from app.services.encryption import decrypt_data
+
+logger = logging.getLogger(__name__)
 
 
 async def _init_tenant_db(engine: AsyncEngine) -> None:
@@ -47,9 +50,23 @@ async def _init_tenant_db(engine: AsyncEngine) -> None:
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                     );
                 """))
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS agent_configs (
+                        id SERIAL PRIMARY KEY,
+                        agent_type VARCHAR(50) UNIQUE NOT NULL,
+                        system_prompt TEXT,
+                        system_prompt_noshow TEXT,
+                        llm_provider VARCHAR(50) NOT NULL,
+                        llm_model VARCHAR(100) NOT NULL,
+                        is_active BOOLEAN DEFAULT TRUE NOT NULL,
+                        reminder_time VARCHAR(10),
+                        reminder_rules TEXT,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                    );
+                """))
             return
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"PostgreSQL pgvector tenant DB initialization failed, falling back: {e}")
 
         # Fallback for PostgreSQL without vector
         try:
@@ -77,8 +94,23 @@ async def _init_tenant_db(engine: AsyncEngine) -> None:
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                     );
                 """))
-        except Exception:
-            pass
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS agent_configs (
+                        id SERIAL PRIMARY KEY,
+                        agent_type VARCHAR(50) UNIQUE NOT NULL,
+                        system_prompt TEXT,
+                        system_prompt_noshow TEXT,
+                        llm_provider VARCHAR(50) NOT NULL,
+                        llm_model VARCHAR(100) NOT NULL,
+                        is_active BOOLEAN DEFAULT TRUE NOT NULL,
+                        reminder_time VARCHAR(10),
+                        reminder_rules TEXT,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                    );
+                """))
+        except Exception as e:
+            logger.error(f"PostgreSQL fallback tenant DB initialization failed: {e}")
+            raise
     else:
         # SQLite fallback
         try:
@@ -106,8 +138,24 @@ async def _init_tenant_db(engine: AsyncEngine) -> None:
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
                 """))
-        except Exception:
-            pass
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS agent_configs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        agent_type VARCHAR(50) UNIQUE NOT NULL,
+                        system_prompt TEXT,
+                        system_prompt_noshow TEXT,
+                        llm_provider VARCHAR(50) NOT NULL,
+                        llm_model VARCHAR(100) NOT NULL,
+                        is_active BOOLEAN DEFAULT TRUE NOT NULL,
+                        reminder_time VARCHAR(10),
+                        reminder_rules TEXT,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                    );
+                """))
+        except Exception as e:
+            logger.error(f"SQLite tenant DB initialization failed: {e}")
+            raise
+
 
 
 class TenantConnectionManager:

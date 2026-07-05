@@ -53,7 +53,7 @@ async def test_webhook_high_concurrency_stress(central_db, test_redis, monkeypat
     passphrase = "test-secret-key-2026"
     monkeypatch.setenv("ENCRYPTION_KEY", passphrase)
     
-    tenant_conn_str = "sqlite+aiosqlite:///file:org_high_concur?mode=memory&cache=shared&uri=true"
+    tenant_conn_str = "sqlite+aiosqlite:///file:org_high_concur?mode=memory&cache=shared&uri=true&timeout=30"
     encrypted_conn = encrypt_helper(tenant_conn_str, passphrase)
     
     async with central_db() as session:
