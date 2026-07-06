@@ -1,10 +1,9 @@
 import logging
 from datetime import datetime
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
 from sqlalchemy import select
 
-from app.api.knowledge import get_tenant_id
 from app.core.tenant_database import tenant_db_manager
 from app.models.agent_config import AgentConfig
 from app.schemas.agent_config import AgentConfigResponse, AgentConfigUpdate
@@ -16,14 +15,33 @@ router = APIRouter(prefix="/api/v1/admin", tags=["Admin Agents"])
 AGENT_TYPES = ["supervisor", "sdr", "agenda", "reminders", "followup"]
 
 
+def get_optional_tenant_id(
+    organization_id: Optional[str] = Query(None),
+    x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID")
+) -> Optional[str]:
+    """
+    Optional tenant ID extraction to support legacy URL paths and modern headers.
+    """
+    return organization_id or x_tenant_id
+
+
 @router.get("/agents", response_model=List[AgentConfigResponse])
 @router.get("/organizations/{org_id}/agents", response_model=List[AgentConfigResponse])
-async def list_agent_configs(org_id: str = None, tenant_id: str = Depends(get_tenant_id)):
+async def list_agent_configs(
+    org_id: str = None,
+    tenant_id: Optional[str] = Depends(get_optional_tenant_id)
+):
     """
     Returns the configuration list of the 5 agent types for the tenant.
     If an agent type does not exist in the database, returns default values.
     """
     resolved_tenant = org_id if org_id else tenant_id
+    if not resolved_tenant:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tenant ID (organization_id query parameter, X-Tenant-ID header, or path parameter) is required."
+        )
+
     try:
         async with await tenant_db_manager.get_tenant_session(resolved_tenant) as session:
             stmt = select(AgentConfig)
@@ -63,14 +81,19 @@ async def update_agent_config(
     agent_type: str,
     body: AgentConfigUpdate,
     org_id: str = None,
-    tenant_id: str = Depends(get_tenant_id)
+    tenant_id: Optional[str] = Depends(get_optional_tenant_id)
 ):
     """
     Performs upsert of the config body for the given agent_type.
     """
     resolved_tenant = org_id if org_id else tenant_id
-    agent_type_lower = agent_type.lower()
+    if not resolved_tenant:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tenant ID (organization_id query parameter, X-Tenant-ID header, or path parameter) is required."
+        )
 
+    agent_type_lower = agent_type.lower()
     if agent_type_lower not in AGENT_TYPES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -78,7 +101,7 @@ async def update_agent_config(
         )
 
     try:
-        async with await tenant_db_manager.get_tenant_session(tenant_id) as session:
+        async with await tenant_db_manager.get_tenant_session(resolved_tenant) as session:
             stmt = select(AgentConfig).where(AgentConfig.agent_type == agent_type_lower)
             result = await session.execute(stmt)
             config = result.scalar_one_or_none()
@@ -123,8 +146,9 @@ async def update_agent_config(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error updating agent config '{agent_type}' for tenant {tenant_id}: {e}")
+        logger.error(f"Error updating agent config '{agent_type}' for tenant {resolved_tenant}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update agent configuration: {str(e)}"
         )
+
