@@ -1,234 +1,253 @@
 # Original User Request
 
-## Follow-up — 2026-06-29T19:33:34Z
+## 2026-07-05T10:01:18Z
 
-Complete a Fase 3.2 do CareFlow AI que foi parcialmente implementada por um agente anterior que morreu durante a execução. A implementação principal já está pronta, faltam apenas os testes.
+Refatorar o grafo LangGraph do CareFlow AI para ler prompts e modelos de LLM dinamicamente do banco de dados do tenant, remover o `rag_node` como nó direto e converter todos os nós para async.
 
-Working directory: /Users/thiagoanselmobarbosa/Desktop/medflow full/CareFlow AI/careflow-backend
-Integrity mode: development
-
----
-
-## Context — O que já foi implementado (NÃO ALTERAR o código existente)
-
-O agente anterior implementou com sucesso em `app/services/agents/graph.py`:
-- `SDROutputSchema` (Pydantic) com 4 campos: `response_message`, `extracted_name`, `extracted_cpf`, `wants_to_schedule`
-- `DEFAULT_SDR_PROFILE` dict multi-tenant (Dr. André Seabra como primeiro perfil)
-- `crc_sdr_node` completo usando Claude (ChatAnthropic) com:
-  - System prompt baseado em template multi-tenant
-  - Structured output extraction via `.with_structured_output(SDROutputSchema)`
-  - Non-overwrite de `collected_data` (não sobrescreve valores existentes com None)
-  - Fallback compatível com MockLLM para testes do supervisor
-  - LLM injectável via `config["configurable"]["sdr_llm"]`
-- `AgentState` atualizado com `wants_to_schedule: Optional[bool]`
-- `SessionSchema` em `app/schemas/session.py` atualizado com `wants_to_schedule: bool = Field(default=False)`
-- `langchain-anthropic` adicionado ao `pyproject.toml`
-- **54 testes existentes passando** (incluindo os 6 testes originais do supervisor em `tests/test_agent_graph.py`)
-
-## O que FALTA fazer
-
-### R1. Criar `tests/test_sdr_node.py`
-Create a comprehensive test file for the SDR node with mocked Claude LLM. The tests must:
-
-1. **Test name extraction**: When mock SDR LLM returns `SDROutputSchema(response_message="Olá!", extracted_name="João Silva", extracted_cpf=None, wants_to_schedule=False)`, verify that `collected_data.full_name` is updated to `"João Silva"` in the final state.
-
-2. **Test non-overwrite**: When mock SDR LLM returns `extracted_name=None` but state already has `collected_data.full_name="Maria Santos"`, verify that `full_name` remains `"Maria Santos"` (not overwritten with None).
-
-3. **Test CPF extraction**: When mock SDR LLM returns `extracted_cpf="12345678900"`, verify `collected_data.cpf` is updated.
-
-4. **Test wants_to_schedule propagation**: When mock SDR LLM returns `wants_to_schedule=True`, verify the state reflects this.
-
-5. **Test full graph routing**: Simulate a user message routed through supervisor → crc_sdr_node → supervisor → END, verifying the complete flow works.
-
-### Mock Pattern
-The SDR node checks `config["configurable"]["sdr_llm"]` for the LLM. Create a `MockSDRLLM` class that:
-- Has `.with_structured_output(schema)` returning a `MockStructuredSDRLLM`
-- The `MockStructuredSDRLLM.invoke(prompt)` returns an `SDROutputSchema` instance with controllable values
-- Also provide the existing `MockLLM` for the supervisor via `config["configurable"]["llm"]`
-
-Reference the existing test pattern in `tests/test_agent_graph.py` for how `MockLLM` and `graph_config` work.
-
----
-
-## Acceptance Criteria
-
-- [ ] `tests/test_sdr_node.py` exists with at least 5 test cases
-- [ ] All tests use mocked LLMs (no real API calls to Claude or Gemini)
-- [ ] All 54 existing tests continue to pass (no regressions)
-- [ ] `poetry run pytest` passes with 100% success (0 failures, 0 errors)
-- [ ] Tests verify `collected_data` update AND non-overwrite behavior
-- [ ] Tests verify `wants_to_schedule` propagation
-
-## Follow-up — 2026-06-30T01:56:00Z
-
-Implement the WhatsApp webhook receiver for CareFlow AI in FastAPI. This includes dynamic tenant database message buffering for double-texting debounce, Redis distributed locking to prevent concurrency race conditions, and executing the patient conversation history via the LangGraph supervisor.
-
-Working directory: /Users/thiagoanselmobarbosa/Desktop/medflow full/CareFlow AI/careflow-backend
+Working directory: `/Users/thiagoanselmobarbosa/Desktop/medflow full/CareFlow AI/careflow-backend`
 Integrity mode: development
 
 ## Requirements
 
-### R1. Webhook Endpoint
-- Create a `POST /api/v1/webhook/whatsapp` route in FastAPI.
-- Extract `organization_id` (via query param or headers) and the sender's `phone_number`.
-- Return HTTP 200 OK immediately (<500ms) after buffering the message without waiting for the LLM graph execution.
+### R1. Remover `rag_node` do StateGraph e tornar `buscar_conhecimento` uma tool compartilhada
+O grafo deve passar a ter apenas 3 nós de diálogo: `supervisor`, `crc_sdr_node`, `agenda_node`. O `rag_node` deve ser removido do StateGraph (remover `workflow.add_node("rag_node", ...)`, a aresta condicional e a aresta de retorno). A função `buscar_conhecimento(query, organization_id)` já existe no arquivo e deve ser chamada internamente pelo `crc_sdr_node` e pelo `agenda_node` quando o paciente trouxer dúvidas institucionais (preços, convênios, regras). O `RoutingDecision` do supervisor deve ser atualizado para não incluir mais `rag_node` como opção de roteamento. Manter a implementação de `buscar_conhecimento` e `_async_rag_node` no arquivo para backward-compatibility, mas remover `rag_node` do grafo compilado.
 
-### R2. PostgreSQL Dynamic Message Buffer (`message_buffer` table) and Client Table (`dados_cliente`)
-- Create and map the following tenant-specific models in `app/models/`:
-  - `MessageBuffer` (table `message_buffer`): Store buffered messages. Must include `id`, `phone_number`, `content`, `created_at`.
-  - `ClientData` (table `dados_cliente`): Store client registration information. Must include `phone_number`, `status` (or `atendimento_ia` as applicable), `created_at`.
-- Dynamically create these tables in the tenant's database schema if they don't exist during tenant pool initialization (update `_init_tenant_db` in `app/core/tenant_database.py`).
-- Each webhook request inserts the incoming message content into the tenant's `message_buffer` table.
-- A FastAPI `BackgroundTasks` job is triggered to process the buffer after a 1-second debounce.
+### R2. Converter todos os nós para async
+Os nós `supervisor_node` e `crc_sdr_node` atualmente são síncronos (`def`). Devem ser convertidos para o mesmo padrão async já usado pelo `agenda_node`: uma implementação interna `async def _async_supervisor_node(...)` / `async def _async_crc_sdr_node(...)` + um wrapper síncrono com `@log_node_execution` que despacha via `ThreadPoolExecutor + asyncio.run`. Isso unifica o padrão e permite chamar `get_agent_config()` e `buscar_conhecimento()` de forma nativa.
 
-### R3. Redis Mutex Lock
-- After the 1-second debounce, attempt to acquire a short-lived exclusive Redis lock.
-- To avoid collision with the Redis session key `{organization_id}:{phone_number}`, use the lock key format: `{organization_id}:{phone_number}:lock`.
-- The lock must prevent concurrent workers from processing the same patient's buffer.
-- With the lock, read all buffered messages for the patient, consolidate/concatenate them, delete the read messages from the `message_buffer` table, and release the lock.
+### R3. Leitura dinâmica da configuração do agente do banco do tenant
+Criar uma função auxiliar assíncrona `get_agent_config(tenant_id: str, agent_type: str) -> Optional[AgentConfig]` que:
+- Usa o `tenant_db_manager` existente em `app.core.tenant_database` para abrir sessão do tenant
+- Busca o registro da tabela `agent_configs` correspondente ao `agent_type`
+- Retorna `None` se não encontrar (para que o fallback funcione)
 
-### R4. Graph Execution and Messaging
-- Check if the patient exists in the tenant's `dados_cliente` table.
-- If not, write a new client record to `dados_cliente` and invoke CRM registration via `MedflowClient.book_appointment` (using placeholder/default parameters like a default doctor, current date/time) to initialize the CRM status to `EM_CONTATO`.
-- Load the conversation session from Redis (using the existing `RedisSessionManager`), execute LangGraph with the consolidated input, save the updated session back to Redis, and send the response back via the `WhatsAppClient` service.
-- Implement a service stub `app/services/whatsapp_client.py simulating message sending.
+Essa função deve ser usada dentro de `_async_supervisor_node`, `_async_crc_sdr_node` e `_async_agenda_node` para carregar `system_prompt`, `llm_provider` e `llm_model` dinamicamente.
 
-## Acceptance Criteria
+### R4. Inicialização dinâmica da LLM por provider e modelo
+Com base nos campos `llm_provider` e `llm_model` do `AgentConfig`:
+- `google` → `ChatGoogleGenerativeAI(model=llm_model)` (já está nas dependências)
+- `openai` → `ChatOpenAI(model=llm_model)` (adicionar `langchain-openai` ao `pyproject.toml` se necessário)
+- `anthropic` → `ChatAnthropic(model=llm_model)` (já está nas dependências)
 
-### Execution & Verification
-- [ ] Created `tests/test_webhook_queue.py` validating:
-  - The webhook endpoint responds HTTP 200 in less than 500ms.
-  - Multiple sequential messages from the same sender are successfully debounced and aggregated into a single graph execution.
-  - The Redis lock (using `fakeredis` in tests) prevents concurrent execution runs for the same sender.
-- [ ] The model files and dynamic tenant db setup successfully support both SQLite (in tests) and PostgreSQL (in production).
-- [ ] Running `poetry run pytest` passes with 100% success, bringing the total number of passing tests above 88.
+Se o banco não tiver configuração cadastrada para aquele agente, usar fallback: `google` como provider e `gemini-1.5-flash` como model.
 
-## Follow-up — 2026-06-30T11:44:36Z
+Criar uma função factory `get_llm_from_config(agent_config: Optional[AgentConfig])` que encapsula essa lógica e retorna a instância da LLM correta.
 
-Replace the static 1-second debounce in the CareFlow AI webhook processor with a **resetable Redis-based debounce** of configurable duration (default 30s), ensuring that only a period of true user silence triggers LangGraph execution. Buffered messages must be consolidated using newline separators before being passed to the supervisor.
+### R5. Remover prompts hardcoded e usar `system_prompt` do banco
+- Remover o `DEFAULT_SDR_PROFILE` (dicionário hardcoded com doctor_name, clinic_name, etc.)
+- No `_async_crc_sdr_node`: usar o `system_prompt` carregado do banco como prompt do agente. Se não houver `system_prompt` no banco, usar um fallback razoável inline.
+- No `_async_supervisor_node`: usar o `system_prompt` do banco para o prompt de roteamento. Fallback para o prompt atual se não existir no banco.
+- No `_async_agenda_node`: usar o `system_prompt` do banco. Fallback para o prompt atual se não existir.
 
-Working directory: /Users/thiagoanselmobarbosa/Desktop/medflow full/CareFlow AI/careflow-backend
-Integrity mode: development
+### R6. Manter todos os testes existentes passando e escrever novos testes
+- Nenhuma mudança deve quebrar os 185 testes já existentes
+- Escrever novos testes unitários validando:
+  - `get_agent_config()` retorna config correta do banco
+  - `get_agent_config()` retorna `None` quando não há registro
+  - `get_llm_from_config()` retorna `ChatGoogleGenerativeAI` para provider `google`
+  - `get_llm_from_config()` retorna `ChatOpenAI` para provider `openai`
+  - `get_llm_from_config()` retorna `ChatAnthropic` para provider `anthropic`
+  - `get_llm_from_config(None)` retorna o fallback (`ChatGoogleGenerativeAI`)
+  - O grafo compilado NÃO contém `rag_node` como nó
+  - O `RoutingDecision` não aceita `rag_node` como valor de `next_node`
+- Comando de validação: `poetry run pytest`
 
-## Context
+## Contexto Técnico
 
-The codebase already has:
-- `POST /api/v1/webhook/whatsapp` in `app/api/webhook.py` that buffers messages into a tenant `message_buffer` table and dispatches a `BackgroundTasks` job.
-- A `process_message_debounce` function implementing a static `asyncio.sleep(1)`.
-- `RedisSessionManager` (`session_manager`) with a redis client accessible via `session_manager.get_client()`.
-- 96 existing passing tests.
-
-## Requirements
-
-### R1. Resetable Debounce via Redis Timestamp
-- Add a configurable environment variable `DEBOUNCE_SECONDS` (default `30`) to the app settings.
-- On each incoming webhook message, after writing to `message_buffer`, write the current timestamp (Unix float epoch) to a Redis key: `last_msg_time:{organization_id}:{phone_number}`.
-- The background task waits `DEBOUNCE_SECONDS` seconds, then re-reads the key.
-- If `current_time - last_msg_time >= DEBOUNCE_SECONDS`, the silence window has been reached: proceed to acquire the Redis mutex lock and process the buffer.
-- If `current_time - last_msg_time < DEBOUNCE_SECONDS`, a newer message arrived during the wait: exit silently. The background task started by that newer message will handle processing.
-
-### R2. Newline-Joined Message Consolidation
-- When consuming all messages from `message_buffer`, join them with `\n` (newline) instead of space (` `).
+- **Arquivo alvo**: `app/services/agents/graph.py` (1143 linhas)
+- **Modelo de configuração**: `app/models/agent_config.py` → `AgentConfig` com campos `agent_type`, `system_prompt`, `llm_provider`, `llm_model`, `is_active`
+- **Tenant DB Manager**: `app.core.tenant_database.tenant_db_manager` (já existe, usado em outros pontos do graph.py)
+- **Dependências existentes no pyproject.toml**: `langchain-google-genai`, `langchain-anthropic` — pode ser necessário adicionar `langchain-openai`
+- **Suite de testes**: 185 testes em `tests/` — todos devem continuar passando
+- **Testes do grafo existentes**: `tests/test_agent_graph.py`, `tests/test_agent_agenda.py`, `tests/test_agent_rag.py`
+- **Stack**: Python + FastAPI + SQLAlchemy async + LangGraph + LangChain + Poetry
 
 ## Acceptance Criteria
 
-### Tests & Verification
-- [ ] File `tests/test_debounce_resetable.py` is created.
-- [ ] Tests set `DEBOUNCE_SECONDS = 2` via monkeypatch or env override for fast execution.
-- [ ] A test scenario simulates 3 messages at `t=0`, `t=0.5s`, `t=1s`:
-  - LangGraph is invoked **exactly once**.
-  - Invocation happens approximately at `t=3s` (i.e., `DEBOUNCE_SECONDS` after the last message).
-  - All 3 messages appear newline-joined in the prompt input.
-- [ ] `poetry run pytest` passes with 100% success (≥ 97 total tests).
+### Grafo atualizado sem `rag_node`
+- [ ] `rag_node` removido do StateGraph (`workflow.add_node`, `workflow.add_conditional_edges`, `workflow.add_edge`)
+- [ ] `RoutingDecision.next_node` atualizado para `Literal["crc_sdr_node", "agenda_node", "END"]`
+- [ ] `buscar_conhecimento()` chamado internamente por `crc_sdr_node` e `agenda_node`
+- [ ] `check_next_node()` não referencia mais `rag_node`
 
-## Follow-up — 2026-06-30T14:42:11Z
+### Nós convertidos para async
+- [ ] `_async_supervisor_node` + wrapper síncrono `supervisor_node`
+- [ ] `_async_crc_sdr_node` + wrapper síncrono `crc_sdr_node`
+- [ ] Padrão unificado com `agenda_node` que já usa esse pattern
 
-Implement human intervention detection, CRM status synchronization, and duplicate card cleanup in the CareFlow AI WhatsApp webhook pipeline.
+### Leitura dinâmica de configs
+- [ ] `get_agent_config()` implementada e functional
+- [ ] Cada nó carrega `system_prompt`, `llm_provider`, `llm_model` do banco
+- [ ] Fallback funciona quando não há config no banco (google/gemini-1.5-flash)
 
-Working directory: /Users/thiagoanselmobarbosa/Desktop/medflow full/CareFlow AI/careflow-backend
-Integrity mode: development
+### LLM factory dinâmica
+- [ ] `get_llm_from_config()` implementada
+- [ ] Suporta `google`, `openai`, `anthropic`
+- [ ] `langchain-openai` adicionado ao pyproject.toml se necessário
 
-## Context
+### Prompts hardcoded removidos
+- [ ] `DEFAULT_SDR_PROFILE` removido
+- [ ] Prompts construídos a partir do `system_prompt` do banco
 
-The codebase already has:
-- `POST /api/v1/webhook/whatsapp` in `app/api/webhook.py` with a resetable Redis debounce and mutex lock (100 tests passing).
-- `app/services/whatsapp_client.py`: stub for sending WhatsApp messages.
-- `app/services/medflow_client.py`: `MedflowClient` with `book_appointment` and `patch_appointment_status`.
-- `app/models/whatsapp.py`: `ClientData` (table `dados_cliente`) with `phone_number` and `status` columns.
-- `RedisSessionManager` (`session_manager`) with `get_client()` for direct Redis access.
-- API contracts documented in `CareFlow AI/docs/medflow_api_contracts.md`.
+### Regressão zero + novos testes
+- [ ] `poetry run pytest` executa sem falhas (0 failures, 0 errors)
+- [ ] Novos testes para `get_agent_config`, `get_llm_from_config`, ausência de `rag_node` no grafo
+- [ ] Nenhum teste existente removido ou desabilitado
 
-## R3 Resolution — Card Cancellation
+- [ ] `get_llm_from_config()` implementada
+- [ ] Suporta `google`, `openai`, `anthropic`
+- [ ] `langchain-openai` adicionado ao pyproject.toml se necessário
 
-> **Resolved:** Use **Option A** — call `POST /api/webhooks/n8n/cancel-appointment/{id}` to set the original `EM_CONTATO` card to `CANCELADO`, which removes it from the active CRM view. This uses the documented, tested endpoint.
+### Prompts hardcoded removidos
+- [ ] O teste deve validar que ao invocar o grafo LangGraph, logs contendo o formato esperado de percurso de nós e tempos em milissegundos são emitidos no log do sistema (capturável via fixture `caplog` do pytest).
+- [ ] Executar `poetry run pytest` deve passar com 100% de sucesso (somando os novos testes de monitoramento aos anteriores).
 
----
+## 2026-07-05T17:30:29Z
 
-## Requirements
+Implementar os endpoints administrativos REST no backend FastAPI para leitura e atualização das configurações dos 5 agentes de IA por tenant, conectando o painel admin ao banco de dados de cada clínica.
 
-### R1. Human Intervention Detection (Bot Self-Reply Protection)
-The webhook must handle outgoing messages (`fromMe = True`) sent through the clinic's own WhatsApp number:
-- When `WhatsAppClient` sends a bot reply, it must persist a short-lived marker in Redis: `bot_sending:{organization_id}:{phone_number}` with a TTL of 5 seconds.
-- When the webhook receives an outgoing event (`fromMe = True`), check for the `bot_sending` key:
-  - If the key **exists**: it is a bot self-reply — ignore the event entirely.
-  - If the key **does not exist**: it is a human agent reply — set `bot_active = False` in the Redis conversation session and update `dados_cliente.status` to `ATENDIMENTO_HUMANO` in the tenant database.
-
-### R2. LangGraph Human Escalation Sync
-When the LangGraph supervisor returns a decision to escalate to human support (e.g., `next_phase = "human"` or `suggested_action = "escalar_humano"`):
-- Set `bot_active = False` in the Redis session.
-- Update `dados_cliente.status` to `ATENDIMENTO_HUMANO` in the tenant database.
-- Call `MedflowClient.patch_appointment_status(appointment_id, "ATENDIMENTO_HUMANO")` to move the CRM card to the human support column.
-
-### R3. Cleanup of Duplicate EM_CONTATO Card After Booking
-After `agenda_node` successfully books an appointment via `MedflowClient.book_appointment` (creating a new `AGENDADO` card):
-- Retrieve the original appointment ID of the `EM_CONTATO` card (stored in the Redis session or `dados_cliente` at first-contact time).
-- Cancel the original card by calling `MedflowClient.cancel_appointment(original_appointment_id)` which maps to `POST /api/webhooks/n8n/cancel-appointment/{appointmentId}`.
-
-## Acceptance Criteria
-
-### Tests & Verification
-- [ ] File `tests/test_human_intervention.py` is created.
-- [ ] Test 1 — **Bot self-reply ignored:** Webhook receives `fromMe = True` **with** `bot_sending` key active in Redis → `bot_active` remains `True`, `dados_cliente.status` is **not** changed.
-- [ ] Test 2 — **Human takeover detected:** Webhook receives `fromMe = True` **without** `bot_sending` key → `bot_active` is set to `False`, `dados_cliente.status` updated to `ATENDIMENTO_HUMANO`.
-- [ ] Test 3 — **Card cleanup after booking:** After `agenda_node` books an appointment, `MedflowClient.cancel_appointment` is called with the original `EM_CONTATO` card ID.
-- [ ] `poetry run pytest` passes with 100% success (≥ 103 total tests).
-
-## Follow-up — 2026-06-30T15:20:00Z
-
-CareFlow AI, um microssistema de agentes em Python/FastAPI integrado ao Medflow. Este subprojeto executa a Fase 5 (Prompt 5.1) focado em Cobertura de Código e Simulação de Carga concorrente com validação de Debounce e Locks.
-
-Working directory: /Users/thiagoanselmobarbosa/Desktop/medflow full/CareFlow AI/careflow-backend
+Working directory: `/Users/thiagoanselmobarbosa/Desktop/medflow full/CareFlow AI/careflow-backend`
 Integrity mode: development
 
 ## Requirements
 
-### R1. Configuração de Cobertura de Código (Code Coverage)
-Adicionar `pytest-cov` ao Poetry como dependência de desenvolvimento e configurar o `pyproject.toml` ou as opções do pytest para que a execução dos testes gere automaticamente relatórios de cobertura do diretório `app/`. O relatório deve ser gerado no terminal e como arquivos XML/HTML em `htmlcov/`.
+### R1. Schemas Pydantic para validação (`app/schemas/agent_config.py`)
+Criar dois schemas:
+- `AgentConfigResponse`: retorna todos os campos do `AgentConfig` (id, agent_type, system_prompt, system_prompt_noshow, llm_provider, llm_model, is_active, reminder_time, reminder_rules, updated_at)
+- `AgentConfigUpdate`: campos todos opcionais para PATCH/PUT parcial — `system_prompt`, `system_prompt_noshow`, `llm_provider` (validar: aceita apenas `'openai'`, `'google'`, `'anthropic'`), `llm_model`, `is_active`, `reminder_time` (validar formato `HH:MM`, ex: `"11:00"`), `reminder_rules` (validar que é uma string JSON representando lista de inteiros, ex: `"[1, 5]"`)
 
-### R2. Script de Simulação de Carga (scripts/simulate_load.py)
-Desenvolver um script independente em Python (`scripts/simulate_load.py`) usando `asyncio` e `httpx` para simular 10 números de WhatsApp concorrentes enviando fluxos de mensagens rápidas e picadas para um mesmo tenant.
-O script deve:
-1. Disparar requisições para o endpoint `/api/v1/webhook/whatsapp`.
-2. Simular mensagens rápidas enviadas pelo mesmo paciente com intervalo de 0.5s para validar o debounce de 30 segundos (o script deve esperar o debounce real para validar se o agrupamento foi executado e as mensagens processadas como um único bloco agregador).
-3. Utilizar configurações/credenciais/cabeçalhos de um tenant de teste e direcionar a simulação para o servidor FastAPI rodando localmente (por padrão `http://localhost:8000`).
-4. Exibir um relatório final no terminal detalhando:
-   - Total de webhooks enviados.
-   - Tempo médio de resposta do webhook (que deve ser < 500ms).
-   - Status de sucesso/falha de processamento no banco do tenant (verificar se as mensagens foram processadas corretamente no banco após o debounce).
+### R2. Rotas admin de configuração de agentes
+Criar as rotas seguindo o mesmo padrão de autenticação já existente no projeto: tenant identificado via header `X-Tenant-ID` ou query param `organization_id` (igual ao `/api/v1/admin/knowledge`):
+
+- **`GET /api/v1/admin/agents`**: retorna lista com as configurações dos 5 tipos de agentes (`supervisor`, `sdr`, `agenda`, `reminders`, `followup`) para o tenant. Se não houver registro no banco do tenant para um tipo, incluí-lo na resposta com valores default (`llm_provider='google'`, `llm_model='gemini-1.5-flash'`, `is_active=True`, demais campos `null`).
+
+- **`PUT /api/v1/admin/agents/{agent_type}`**: atualiza os campos enviados no body para o agente especificado no banco do tenant. Se não houver registro, criá-lo (upsert). Retorna o `AgentConfigResponse` atualizado. Retornar HTTP 400 para `agent_type` inválido ou falha de validação.
+
+### R3. Registro das rotas em `app/main.py`
+As novas rotas devem ser registradas no `app/main.py` com `app.include_router(...)`.
+
+### R4. Testes em `tests/test_agent_configs_api.py`
+Escrever testes de integração HTTP cobrindo:
+- `GET /api/v1/admin/agents` com tenant que tem configs salvas → retorna todos os 5 agentes com dados corretos
+- `GET /api/v1/admin/agents` com tenant sem configs → retorna todos os 5 agentes com valores default
+- `PUT /api/v1/admin/agents/reminders` com `reminder_time="11:00"` e `reminder_rules="[1, 5]"` → 200 OK, dados salvos
+- `PUT /api/v1/admin/agents/reminders` com `reminder_time="25:99"` → 422 Unprocessable Entity
+- `PUT /api/v1/admin/agents/reminders` com `reminder_rules="not-json"` → 422 Unprocessable Entity
+- `PUT /api/v1/admin/agents/invalid_type` → 400 Bad Request
+- Isolamento multi-tenant: atualizar prompt do org_1 não afeta org_2
+- Comando: `poetry run pytest` → 0 failures, 0 errors
+
+## Contexto Técnico
+
+- **Padrão auth existente**: `X-Tenant-ID` header ou `organization_id` query param (ver `app/api/knowledge.py` → `get_tenant_id()`)
+- **AgentConfig model**: `app/models/agent_config.py` — campos mapeados, validação de `agent_type` via `@validates`
+- **Tenant DB Manager**: `app/core/tenant_database.py` → `tenant_db_manager.get_tenant_session(org_id)`
+- **Schemas existentes**: `app/schemas/session.py` — referência de estilo Pydantic v2
+- **Tipos válidos de agente**: `'supervisor'`, `'sdr'`, `'agenda'`, `'reminders'`, `'followup'`
+- **Suite atual**: 215 testes passando — todos devem continuar passando
+- **Stack**: Python + FastAPI + SQLAlchemy async + Pydantic v2 + Poetry
 
 ## Acceptance Criteria
 
-### Code Coverage
-- [ ] O relatório de cobertura do `pytest-cov` está configurado no projeto.
-- [ ] A cobertura total de linhas de código sob o diretório `app/` é superior a 90% (excluindo arquivos irrelevantes/gerados, caso existam, que tenham sido configurados no `pyproject.toml`).
+### Schemas válidos
+- [ ] `AgentConfigResponse` cobre todos os 10 campos do modelo
+- [ ] `AgentConfigUpdate` valida `llm_provider` (enum: openai/google/anthropic)
+- [ ] `AgentConfigUpdate` valida `reminder_time` como `HH:MM`
+- [ ] `AgentConfigUpdate` valida `reminder_rules` como JSON string de lista de inteiros
 
-### Load Simulation Script
-- [ ] O script `scripts/simulate_load.py` roda localmente sem erros e gera o relatório consolidado com sucesso.
-- [ ] O script simula corretamente a concorrência de 10 números enviando mensagens picadas com intervalo de 0.5s.
-- [ ] O script valida que as mensagens são agrupadas em um único processamento pelo debounce de 30 segundos, verificando no banco de dados o status do processamento após a expiração do debounce.
-- [ ] O tempo médio de resposta de cada webhook retornado pelo script é menor que 500ms.
+### Endpoints funcionais
+- [ ] `GET /api/v1/admin/agents` retorna lista de 5 itens sempre
+- [ ] Agentes sem config retornam valores default (não erro)
+- [ ] `PUT /api/v1/admin/agents/{agent_type}` faz upsert no banco do tenant
+- [ ] `PUT` com `agent_type` inválido retorna HTTP 400
+- [ ] `PUT` com campos inválidos retorna HTTP 422
 
-### Test Execution
-- [ ] O comando `poetry run pytest` passa com 100% de sucesso (incluindo todos os 103 testes originais mais eventuais novos testes adicionados).
+### Rotas registradas
+- [ ] Router importado e registrado em `app/main.py`
 
+### Isolamento multi-tenant
+- [ ] Atualização de org_1 não afeta dados de org_2
 
+### Regressão zero + novos testes
+- [ ] `poetry run pytest` → 0 failures, 0 errors
+- [ ] Todos os cenários do R4 cobertos em `tests/test_agent_configs_api.py`g`, `get_llm_from_config`, ausência de `rag_node` no grafo
+- [ ] Nenhum teste existente removido ou desabilitado
+
+## 2026-07-05T19:42:39Z
+
+Implementar os endpoints administrativos REST no backend FastAPI para leitura e atualização das configurações dos 5 agentes de IA por tenant, conectando o painel admin ao banco de dados de cada clínica.
+
+Working directory: `/Users/thiagoanselmobarbosa/Desktop/medflow full/CareFlow AI/careflow-backend`
+Integrity mode: development
+
+## Decisões já tomadas (Socratic Gate resolvido)
+
+1. **Validação de `reminder_time`**: Validar limites lógicos de tempo (horas entre 00 e 23, minutos entre 00 e 59) além de correspondência ao padrão HH:MM.
+2. **Validação de `reminder_rules`**: Garantir que seja um JSON válido que resolve para uma lista de inteiros positivos maiores que zero.
+3. **Padrão de Autenticação**: Usar e importar a função `get_tenant_id()` existente em `app/api/knowledge.py` para consistência de extração/validação do Tenant ID (via header `X-Tenant-ID` ou query param `organization_id`).
+
+## Requirements
+
+### R1. Schemas Pydantic para validação (`app/schemas/agent_config.py`)
+Criar dois schemas:
+- `AgentConfigResponse`: retorna todos os campos do `AgentConfig` (id, agent_type, system_prompt, system_prompt_noshow, llm_provider, llm_model, is_active, reminder_time, reminder_rules, updated_at)
+- `AgentConfigUpdate`: campos todos opcionais para PUT parcial — `system_prompt`, `system_prompt_noshow`, `llm_provider` (enum: apenas `'openai'`, `'google'`, `'anthropic'`), `llm_model`, `is_active`, `reminder_time` (validar formato `HH:MM` com horas 00-23 e minutos 00-59), `reminder_rules` (validar que é uma string JSON representando lista de inteiros positivos maiores que zero)
+
+### R2. Rotas admin de configuração de agentes
+Criar as rotas reutilizando `get_tenant_id()` de `app/api/knowledge.py` para identificação do tenant via header `X-Tenant-ID` or query param `organization_id`:
+
+- **`GET /api/v1/admin/agents`**: retorna lista com as configurações dos 5 tipos de agentes (`supervisor`, `sdr`, `agenda`, `reminders`, `followup`) para o tenant. Se não houver registro no banco do tenant para um tipo, incluí-lo na resposta com valores default (`llm_provider='google'`, `llm_model='gemini-1.5-flash'`, `is_active=True`, demais campos `null`).
+
+- **`PUT /api/v1/admin/agents/{agent_type}`**: atualiza os campos enviados no body para o agente especificado no banco do tenant. Se não houver registro, criá-lo (upsert). Retorna o `AgentConfigResponse` atualizado. Retornar HTTP 400 para `agent_type` inválido. Retornar HTTP 422 para falha de validação de campos.
+
+### R3. Registro das rotas em `app/main.py`
+As novas rotas devem ser registradas no `app/main.py` com `app.include_router(...)`.
+
+### R4. Testes em `tests/test_agent_configs_api.py`
+Escrever testes de integração HTTP cobrindo:
+- `GET /api/v1/admin/agents` com tenant que tem configs salvas → retorna todos os 5 agentes com dados corretos
+- `GET /api/v1/admin/agents` com tenant sem configs → retorna todos os 5 agentes com valores default
+- `PUT /api/v1/admin/agents/reminders` com `reminder_time="11:00"` e `reminder_rules="[1, 5]"` → 200 OK, dados salvos
+- `PUT /api/v1/admin/agents/reminders` com `reminder_time="25:99"` → 422
+- `PUT /api/v1/admin/agents/reminders` com `reminder_time="23:60"` → 422 (minutos inválidos)
+- `PUT /api/v1/admin/agents/reminders` com `reminder_rules="not-json"` → 422
+- `PUT /api/v1/admin/agents/reminders` com `reminder_rules="[-1, 5]"` → 422 (não positivo)
+- `PUT /api/v1/admin/agents/invalid_type` → 400
+- Isolamento multi-tenant: atualizar prompt do org_1 não afeta org_2
+- `poetry run pytest` → 0 failures, 0 errors
+
+## Contexto Técnico
+
+- **Padrão auth existente**: `get_tenant_id()` em `app/api/knowledge.py`
+- **AgentConfig model**: `app/models/agent_config.py`
+- **Tenant DB Manager**: `app/core/tenant_database.py` → `tenant_db_manager.get_tenant_session(org_id)`
+- **Schemas existentes**: `app/schemas/session.py` — referência de estilo Pydantic v2
+- **Tipos válidos de agente**: `'supervisor'`, `'sdr'`, `'agenda'`, `'reminders'`, `'followup'`
+- **Suite atual**: 215 testes passando — todos devem continuar passando
+- **Stack**: Python + FastAPI + SQLAlchemy async + Pydantic v2 + Poetry
+
+## Acceptance Criteria
+
+### Schemas válidos
+- [ ] `AgentConfigResponse` cobre todos os 10 campos do modelo
+- [ ] `AgentConfigUpdate` valida `llm_provider` (enum: openai/google/anthropic)
+- [ ] `AgentConfigUpdate` valida `reminder_time` com formato HH:MM e limites lógicos (00-23h, 00-59min)
+- [ ] `AgentConfigUpdate` valida `reminder_rules` como JSON string de lista de inteiros positivos
+
+### Endpoints funcionais
+- [ ] `GET /api/v1/admin/agents` retorna lista de exatamente 5 itens sempre
+- [ ] Agentes sem config retornam valores default (não erro)
+- [ ] `PUT /api/v1/admin/agents/{agent_type}` faz upsert no banco do tenant
+- [ ] `PUT` com `agent_type` inválido retorna HTTP 400
+- [ ] `PUT` com campos inválidos retorna HTTP 422
+
+### Rotas registradas
+- [ ] Router importado e registrado em `app/main.py`
+
+### Isolamento multi-tenant
+- [ ] Atualização de org_1 não afeta dados de org_2
+
+### Regressão zero + novos testes
+- [ ] `poetry run pytest` → 0 failures, 0 errors
+- [ ] Todos os cenários do R4 cobertos em `tests/test_agent_configs_api.py`
+- [ ] Nenhum teste existente removido ou desabilitado

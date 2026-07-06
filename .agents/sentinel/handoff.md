@@ -1,20 +1,29 @@
-# Handoff Report — Sentinel
+# Handoff Report - Sentinel Completion
 
 ## Observation
-The Victory Auditor `840bf9ae-744b-41f8-b511-43481b6d91cb` has successfully completed its audit and issued a `VICTORY CONFIRMED` verdict. All requirements (R1, R2, R3) are implemented, verified, and passing.
+- The REST administrative endpoints for AI agent configurations per tenant have been successfully implemented and validated.
+- Pydantic V2 schemas (`AgentConfigResponse`, `AgentConfigUpdate`) are written in `app/schemas/agent_config.py`.
+- Admin router for listing (with preset defaults) and upserting configs (with validations) is implemented in `app/api/admin_agents.py`.
+- Router is registered in `app/main.py`.
+- Test suite is implemented in `tests/test_agent_configs_api.py`.
+- Victory Auditor `9e8eafee-5b0b-46aa-a226-7009ae74510e` has completed verification, returning a verdict of `VICTORY CONFIRMED` with all 225 tests passing.
 
 ## Logic Chain
-1. Prometheus FastAPI instrumentator was added to dependencies, initialized in `app/main.py`, and the `/metrics` endpoint was verified.
-2. Structured stdout tracing for LangGraph nodes was implemented using a custom decorator and a thread-safe `ContextVar` inside `app/services/agents/graph.py`.
-3. LangSmith configuration variables were mapped in settings (`app/core/config.py`) and `.env`.
-4. The test suite was verified: `tests/test_monitoring.py` confirms that the `/metrics` endpoint returns a 200 HTTP status with Prometheus format metrics, and that invoking the LangGraph graph emits correct node execution traces with durations on stdout.
-5. All 178 tests passed successfully.
+- Requirements check:
+  - R1 (Schemas): Created and validated `llm_provider`, `reminder_time`, `reminder_rules` successfully.
+  - R2 (Routes): Created `GET /api/v1/admin/agents` and `PUT /api/v1/admin/agents/{agent_type}` reusing `get_tenant_id` authentication.
+  - R3 (Registration): Included router in `app/main.py`.
+  - R4 (Test coverage): 10 test scenarios implemented in `tests/test_agent_configs_api.py` and run successfully.
+- Independent victory audit confirms all stages and outputs are complete, genuine, and regression-free.
 
 ## Caveats
-None.
+- None.
 
 ## Conclusion
-The monitoring and LLM tracing configurations are complete, clean, and fully validated.
+- Phase B.1 (Admin Agent Configurations) is complete and confirmed.
 
 ## Verification Method
-Execute `poetry run pytest tests/test_monitoring.py` to run the monitoring tests, or run `poetry run pytest` for the complete 178-test suite.
+- Execute the test suite:
+  ```bash
+  poetry run pytest
+  ```
