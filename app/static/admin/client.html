@@ -671,10 +671,20 @@
             const modelsConfig = [
                 { id: 'gpt-4o', label: 'OpenAI — GPT-4o', provider: 'openai' },
                 { id: 'gpt-4o-mini', label: 'OpenAI — GPT-4o mini', provider: 'openai' },
+                { id: 'o1', label: 'OpenAI — o1', provider: 'openai' },
+                { id: 'o1-mini', label: 'OpenAI — o1-mini', provider: 'openai' },
+                { id: 'o3-mini', label: 'OpenAI — o3-mini', provider: 'openai' },
+                { id: 'gpt-4-turbo', label: 'OpenAI — GPT-4 Turbo', provider: 'openai' },
+                { id: 'gpt-3.5-turbo', label: 'OpenAI — GPT-3.5 Turbo', provider: 'openai' },
                 { id: 'gemini-1.5-flash', label: 'Google — Gemini 1.5 Flash', provider: 'google' },
                 { id: 'gemini-1.5-pro', label: 'Google — Gemini 1.5 Pro', provider: 'google' },
+                { id: 'gemini-2.0-flash', label: 'Google — Gemini 2.0 Flash', provider: 'google' },
+                { id: 'gemini-2.0-flash-lite', label: 'Google — Gemini 2.0 Flash Lite', provider: 'google' },
+                { id: 'gemini-2.0-pro-exp', label: 'Google — Gemini 2.0 Pro Experimental', provider: 'google' },
                 { id: 'claude-3-5-sonnet', label: 'Anthropic — Claude 3.5 Sonnet', provider: 'anthropic' },
-                { id: 'claude-3-5-haiku', label: 'Anthropic — Claude 3.5 Haiku', provider: 'anthropic' }
+                { id: 'claude-3-5-haiku', label: 'Anthropic — Claude 3.5 Haiku', provider: 'anthropic' },
+                { id: 'claude-3-opus', label: 'Anthropic — Claude 3 Opus', provider: 'anthropic' },
+                { id: 'claude-3-haiku', label: 'Anthropic — Claude 3 Haiku', provider: 'anthropic' }
             ];
 
             const isStandardModel = modelsConfig.some(m => m.id === agent.llm_model);
