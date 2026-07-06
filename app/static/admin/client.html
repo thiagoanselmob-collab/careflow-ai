@@ -656,6 +656,17 @@
             renderAgentsList(currentAgents, currentAiKeys, currentGlobalDisable);
         }
 
+        function handleModelSelectChange(agentType) {
+            const selectEl = document.getElementById(`model-${agentType}`);
+            const inputEl = document.getElementById(`model-custom-${agentType}`);
+            if (selectEl.value.startsWith('custom-')) {
+                inputEl.classList.remove('hidden');
+                inputEl.focus();
+            } else {
+                inputEl.classList.add('hidden');
+            }
+        }
+
         function getModelSelectHtml(agent, aiKeys, globalDisable) {
             const modelsConfig = [
                 { id: 'gpt-4o', label: 'OpenAI — GPT-4o', provider: 'openai' },
@@ -666,7 +677,11 @@
                 { id: 'claude-3-5-haiku', label: 'Anthropic — Claude 3.5 Haiku', provider: 'anthropic' }
             ];
 
-            let selectHtml = `<select id="model-${agent.agent_type}" ${globalDisable ? 'disabled' : ''} class="w-full glass-input rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-500">`;
+            const isStandardModel = modelsConfig.some(m => m.id === agent.llm_model);
+            const initialIsCustom = !isStandardModel;
+
+            let selectHtml = `<div class="flex flex-col space-y-2">`;
+            selectHtml += `<select id="model-${agent.agent_type}" ${globalDisable ? 'disabled' : ''} onchange="handleModelSelectChange('${agent.agent_type}')" class="w-full glass-input rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-500">`;
 
             modelsConfig.forEach(m => {
                 const isKeyActive = aiKeys[m.provider] === true;
@@ -686,7 +701,29 @@
                 selectHtml += `<option value="${m.id}" data-provider="${m.provider}" ${selectedAttr} ${disabledAttr}>${m.label}${labelSuffix}</option>`;
             });
 
+            // Add custom options for each provider that has an active key
+            const providers = [
+                { id: 'openai', label: 'OpenAI — Outro Modelo (Personalizado)' },
+                { id: 'google', label: 'Google — Outro Modelo (Personalizado)' },
+                { id: 'anthropic', label: 'Anthropic — Outro Modelo (Personalizado)' }
+            ];
+
+            providers.forEach(p => {
+                const isKeyActive = aiKeys[p.id] === true;
+                const isCurrentProviderCustom = initialIsCustom && agent.llm_provider === p.id;
+                let disabledAttr = isKeyActive ? '' : 'disabled';
+                let selectedAttr = isCurrentProviderCustom ? 'selected' : '';
+                selectHtml += `<option value="custom-${p.id}" data-provider="${p.id}" ${selectedAttr} ${disabledAttr}>${p.label}</option>`;
+            });
+
             selectHtml += `</select>`;
+
+            // Custom model input field (hidden by default unless a custom option is selected)
+            const customModelValue = initialIsCustom ? agent.llm_model : '';
+            const customInputClass = initialIsCustom ? '' : 'hidden';
+            selectHtml += `<input type="text" id="model-custom-${agent.agent_type}" value="${escapeHtml(customModelValue)}" ${globalDisable ? 'disabled' : ''} placeholder="Identificador do modelo (Ex: gemini-2.5-flash, gpt-5)" class="w-full glass-input rounded-xl px-4 py-2 text-xs text-white placeholder-gray-500 ${customInputClass}" />`;
+            selectHtml += `</div>`;
+
             return selectHtml;
         }
 
@@ -710,10 +747,19 @@
                 followup: 'Robô de Follow-up: Acompanha pacientes após a consulta, coletando feedback ou incentivando retorno.'
             };
 
+            const agentNames = {
+                supervisor: 'Supervisora',
+                sdr: 'SDR / Pré-Vendas',
+                agenda: 'Agendamento',
+                reminders: 'Lembretes de Consulta',
+                followup: 'Follow-up de Pacientes'
+            };
+
             agents.forEach(agent => {
                 const isOpen = openAgentType === agent.agent_type;
                 const icon = agentIcons[agent.agent_type] || '🤖';
                 const desc = agentDescriptions[agent.agent_type] || '';
+                const displayName = agentNames[agent.agent_type] || agent.agent_type;
                 
                 const badgeClass = agent.is_active 
                     ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
@@ -733,7 +779,7 @@
                             ${icon}
                         </div>
                         <div>
-                            <h3 class="text-sm font-bold text-white tracking-wide">${escapeHtml(agent.agent_name)}</h3>
+                            <h3 class="text-sm font-bold text-white tracking-wide">${escapeHtml(displayName)}</h3>
                             <p class="text-xs text-gray-400 font-medium capitalize">${agent.agent_type} • <span class="text-cyan-400">${escapeHtml(agent.llm_model)}</span></p>
                         </div>
                     </div>
@@ -761,7 +807,7 @@
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Nome do Agente</label>
-                                <input type="text" id="name-${agent.agent_type}" value="${escapeHtml(agent.agent_name)}" ${globalDisable ? 'disabled' : ''} 
+                                <input type="text" id="name-${agent.agent_type}" value="${escapeHtml(displayName)}" ${globalDisable ? 'disabled' : ''} 
                                        class="w-full glass-input rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-500">
                             </div>
                             
@@ -802,23 +848,29 @@
         }
 
         async function saveAgent(agentType) {
-            const nameInput = document.getElementById(`name-${agentType}`);
-            const modelSelect = document.getElementById(`model-${agentType}`);
-            const promptTextarea = document.getElementById(`prompt-${agentType}`);
-            const activeCheckbox = document.getElementById(`active-${agentType}`);
+            const nameEl = document.getElementById(`name-${agentType}`);
+            const promptEl = document.getElementById(`prompt-${agentType}`);
+            const activeEl = document.getElementById(`active-${agentType}`);
+            const selectEl = document.getElementById(`model-${agentType}`);
+            const inputEl = document.getElementById(`model-custom-${agentType}`);
             const saveButton = document.getElementById(`btnSave-${agentType}`);
             const spinner = document.getElementById(`spinner-${agentType}`);
 
-            if (!nameInput || !modelSelect || !promptTextarea || !activeCheckbox) return;
+            let model;
+            let provider;
 
-            const selectedOption = modelSelect.options[modelSelect.selectedIndex];
-            const provider = selectedOption.getAttribute('data-provider');
-            const model = selectedOption.value;
+            if (selectEl.value.startsWith('custom-')) {
+                model = inputEl.value.trim();
+                provider = selectEl.value.substring(7);
+            } else {
+                model = selectEl.value;
+                const selectedOption = selectEl.options[selectEl.selectedIndex];
+                provider = selectedOption ? selectedOption.getAttribute('data-provider') : '';
+            }
 
             const payload = {
-                agent_name: nameInput.value.trim(),
-                system_prompt: promptTextarea.value.trim(),
-                is_active: activeCheckbox.checked,
+                system_prompt: promptEl.value.trim() || null,
+                is_active: activeEl.checked,
                 llm_provider: provider,
                 llm_model: model
             };
