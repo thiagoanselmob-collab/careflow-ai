@@ -68,6 +68,6 @@ app.mount("/admin/static", StaticFiles(directory=static_dir), name="admin_static
 # ── Root route ────────────────────────────────────────────────────────────────
 @app.get("/")
 def read_root():
-    """Welcome root message."""
-    return {"message": "Welcome to CareFlow AI Backend"}
+    """Serve the admin login page."""
+    return FileResponse(os.path.join(static_dir, "login.html"))
 
